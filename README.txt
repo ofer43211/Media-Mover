@@ -62,5 +62,3 @@ admin/media_mover
  DEVELOPERS
 -----------------------------------------------------------------------
  please see http://drupal.org/node/566870
-
-Testing for git integration
