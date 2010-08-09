@@ -1,0 +1,11 @@
+/* $Id: mm_s3.css,v 1.1.2.1 2010/04/22 12:48:22 arthuregg Exp $ */
+
+/**
+ * @file
+ * CSS definitions for mm_S3
+ */
+ 
+ /* Hide the perms fieldset */
+ .mm_s3_perm_roles {
+   display: none;
+ }

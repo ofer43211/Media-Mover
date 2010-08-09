@@ -1,0 +1,67 @@
+<?php
+
+// $Id: mm_monitor.install,v 1.1.2.1 2010/03/24 04:05:14 arthuregg Exp $
+
+/**
+ * @file
+ * Installation for run control
+ */
+
+
+/**
+ * install the token table
+ */
+function mm_run_control_install() {
+  // Create tables.
+  drupal_install_schema('mm_run_control');
+}
+
+
+/**
+ * Implementation of hook_uninstall
+ * deletes all media mover tables
+ */
+function mm_run_control_uninstall() {
+  drupal_uninstall_schema('mm_run_control');
+}
+
+
+/**
+ * Implementation of hook_schema()
+ */
+function mm_run_control_schema() {
+  $schema['media_mover_server_list'] = array(
+    'description' => t('List of servers useable for media mover processing'),
+    'fields' => array(
+      'sid' => array(
+        'description' => t('Server id'),
+        'type' => 'text',
+        'size' => 'small',
+      ),
+      'time' => array(
+        'description' => t('Last server registration time'),
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0,
+      ),
+     'status' => array(
+        'description' => t('Server status'),
+        'type' => 'text',
+        'size' => 'small',
+      ),
+      'enabled' => array(
+        'description' => t('Server enabled'),
+        'type' => 'text',
+        'size' => 'small',
+      ),
+      'configuration' => array(
+        'type' => 'text',
+        'not null' => FALSE,
+        'size' => 'big',
+        'description' => 'Serialized configuration data for this server to run Media Mover configurations.',
+      ),
+
+    ),
+  );
+  return $schema;
+}

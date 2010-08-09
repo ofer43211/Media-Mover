@@ -1,0 +1,7 @@
+; $Id: mm_getid3.info,v 1.1.2.1 2010/02/08 16:51:29 arthuregg Exp $
+name =  Media Mover GetId3 module
+description = Allows for reading and writing of metadata on files
+package = "Media Mover"
+dependencies[] = media_mover_api
+core = 6.x
+php = 5.0

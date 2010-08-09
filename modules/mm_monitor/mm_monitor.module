@@ -1,0 +1,652 @@
+<?php
+
+/**
+ * @file
+ * This module provides mechanisms to limit
+ * when media mover configurations are run and
+ * distribution of processing to different servers
+ */
+
+
+define('mm_monitor_STATUS_ALIVE', 'alive');
+define('mm_monitor_STATUS_EXPIRED', 'expired');
+define('mm_monitor_STATUS_ENABLED', 'enabled');
+
+
+/* *******************************************
+ * Drupal Hook Functions
+ */
+
+
+/**
+ * Implements hook_menu().
+ *
+ * @return array
+ */
+function mm_monitor_menu() {
+  $items = array();
+  $items['admin/build/media_mover/settings/monitor'] = array(
+    'title' => 'Run Control',
+    'description' => t('Configure monitor services.'),
+    'access arguments' => array('administer media_mover'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mm_monitor_admin_form'),
+  );
+
+  /*
+  $items['admin/build/media_mover/settings/auto_run'] = array(
+    'title' => 'Run Control',
+    'description' => t('Configure Media Mover Services.'),
+    'access arguments' => array('administer media_mover'),
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mm_monitor_server_settings_form'),
+  );
+  */
+  $items['admin/build/media_mover/batch'] = array(
+    'page callback' => 'mmm_monitor_batch',
+    'page type' => MENU_CALLBACK,
+    'access callback' => 'mm_monitor_restrict_access'
+  );
+  return $items;
+}
+
+
+/**
+ * Implementation of Drupal 6's theme registry
+ * @return array
+ */
+function mm_monitor_theme() {
+  return array(
+    'mm_monitor_server_list' => array(
+      'arguments' => array('form' => NULL),
+    ),
+  );
+}
+
+
+/**
+ * Implementation of hook_cron
+ * Allow all instances to register themselves as servesr
+ */
+function mm_monitor_cron() {
+  // register this server
+  mm_monitor_register_server();
+  // expire any servers that have not been updated
+  mm_monitor_expire_servers();
+  // Monitor configurations
+  mm_monitor_monitor_files();
+
+}
+
+
+/**
+ * Implements hook_mail().
+ * @param unknown_type $key
+ * @param unknown_type $message
+ * @param unknown_type $params
+ * @return unknown_type
+ */
+function mm_monitor_mail($key, &$message, $params) {
+  $language = $message['language'];
+  switch($key) {
+    default:
+      $message['subject'] = t($params['subject'], $params['params'], $language->language);
+      $message['body'][] = t($params['body'], $params['params'], $language->language);
+    break;
+  }
+}
+
+
+/**
+ * Implements hook_form_alter().
+ */
+function mm_monitor_form_alter(&$form, $form_state, $form_id) {
+  if ($form_id == 'media_mover_ui_add_config_form' || $form_id == 'media_mover_ui_config_edit_form') {
+    $form['email_monitor'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Email monitoring'),
+      '#collapsible' => TRUE,
+      '#collapsed' => $configuration->settings->mm_monitor_file ? false : true,
+      '#description' => t('Sometimes a files fail to complete during processing.
+        If a file is running longer than the specified time, an email will be sent'),
+    );
+    $form['email_monitor']['mm_monitor_file'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Notify admin when a MM file has run to long'),
+      '#default_value' => $configuration->settings->mm_monitor_file,
+    );
+    $form['email_monitor']['mm_monitor_file_email'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Email address to notify'),
+      '#default_value' => $configuration->settings->mm_monitor_file_email,
+      '#description' => t('Email address to notify that a MM job has taken more than the set time.'),
+    );
+    $form['email_monitor']['mm_monitor_file_time'] = array(
+      '#type' => 'textfield',
+      '#title' => t('Monitor time'),
+      '#default_value' => $configuration->settings->mm_monitor_file_time,
+      '#description' => t('Minimum file running time before a notification is sent. Enter time in minutes'),
+      '#size' => 4,
+    );
+    // We want to save this data after the full form is submitted so we have a cid
+    $form['#submit'][] = 'mm_monitor_configuration_files_submit';
+  }
+}
+
+
+/* ****************************************** */
+/* Form Functions                             */
+/* ****************************************** */
+
+/**
+ * Helper function to track which configurations are enabled
+ *
+ * @param unknown_type $form
+ * @param unknown_type $form_state
+ * @return unknown_type
+ */
+function mm_monitor_configuration_files_submit($form, &$form_state) {
+  $enabled = variable_get('mm_monitor_file_configurations', array());
+  if ($cid = $form_state['storage']['configuration']->cid) {
+    if ($form_state['values']['mm_monitor_file']) {
+      $enabled[$cid] = array(
+        'email' => $form_state['values']['mm_monitor_file_email'],
+        'time' => $form_state['values']['mm_monitor_file_time'],
+        'last_sent' => 0
+      );
+    }
+    else {
+      unset($enabled['cid']);
+    }
+    variable_set('mm_monitor_file_configurations', $enabled);
+  }
+}
+
+
+/**
+ * Provides the settigns form
+ * @return $form
+ */
+function mm_monitor_admin_form() {
+  $form = array();
+
+  // Get a list of all current MM configurations
+  $configurations = media_mover_api_configurations_get();
+  foreach ($configurations as $configuration) {
+    $options[$configuration->cid] = '<strong>'. l($configuration->name, 'admin/build/media_mover/configurations/' . $configuration->cid) .'</strong>'. $configuration->description;
+  }
+
+
+  // Get a list of all current MM configurations
+  $configurations = media_mover_api_configurations_get();
+  foreach ($configurations as $configuration) {
+    $options[$configuration->cid] = '<strong>'. l($configuration->name, 'admin/build/media_mover/configurations/' . $configuration->cid) .'</strong>'. $configuration->description;
+  }
+
+  $form['mm_monitor_monitor_configurations'] = array(
+    '#title' => t('Configurations to monitor'),
+    '#type' => 'select',
+    '#multiple' => true,
+    '#options' => $options,
+    '#default_value' => variable_get('mm_monitor_monitor_configurations', array()),
+    '#description' => t('Select the configurations you wish to monitor.')
+  );
+
+  $form['mm_monitor_monitor_time'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Minium alert time'),
+    '#size' => 3,
+    '#default_value' => variable_get('mm_monitor_monitor_time', 10),
+    '#description' => t('Set the mimum time that an action has to run
+      before an email notification is sent out. Time is in minutes.'
+    ),
+    '#suffix' => '</div>'
+  );
+
+  return system_settings_form($form);
+}
+
+
+/* *******************************************
+ * Monitor funcions
+ */
+
+
+/**
+ * Checks for files that have run too long
+ * @TODO
+ */
+function mm_monitor_monitor_files() {
+  $enabled = variable_get('mm_monitor_file_configurations', array());
+  foreach ($enabled as $cid => $settings) {
+    $rows = array();
+    $time = time() - ($settings['time'] * 60);
+    $results = db_query("SELECT mmfid, cid, lock_date FROM {media_mover_files} WHERE lock_date < %d AND status = '%s' AND cid = '%s' ORDER BY lock_date", $time, MMA_FILE_STATUS_LOCKED, $cid);
+    while ($result = db_fetch_array($results)) {
+      $rows[] = t('%mmfid | %date | <%link>', array(
+        '%mmfid' => $result['mmfid'],
+        '%date' => format_date($result['lock_date']),
+        '%link' => l($result['mmfid'], '/admin/build/media_mover/file/edit/' . $result['mmfid'], array('absolute' => TRUE))
+      ));
+    }
+
+    $message = 'Media Mover Monitor found files running longer than normal.
+      You may want to consider decreasing your cron.php frequency or increase your PHP timeout,
+      or examine the following configurations to see if there is a particular issue with them.';
+    $mesage .= "\n\n" . implode("\n", $rows);
+
+    $params = array(
+      '%name' => $configuration->name,
+      '%time' => intval( (time() - $configuration->start_time) / 60),
+      '%site_name' => variable_get('site_name', '')
+    );
+
+    $email_params = array(
+      'subject' => '[%sitename] Media Mover Monitor: long running files',
+      'body' => $message,
+      'params' => $params
+    );
+
+    // Only send one email per email frequency per configuration
+    if ($settings['last_sent'] < (time() - variable_get('mm_monitor_email_frequency', 3600))) {
+      $enabled[$cid]['last_sent'] = time();
+      variable_set('mm_monitor_file_configurations', $enabled);
+      drupal_mail('mm_monitor', 'long_running_files', $settings['email'], language_default(), $email_params);
+
+    }
+  }
+}
+
+
+/* *******************************************
+ * Media Mover  functions
+ */
+
+
+/**
+ * implementation of hook_run_control
+ * handles the pass off to the different throttle options
+ * @TODO this needs to be re-implemented
+ *
+ * @param object $configuration
+ * @param string $action
+ */
+function mm_monitor_run_control($step) {
+	if (function_exists($function)) {
+		// return $function($configuration, $file);
+	}
+}
+
+
+/**
+ * handles all throttle options that are run off of cron
+ *
+ * @param object $configuration
+ * @return boolean
+ */
+function mm_monitor_cron_run($configuration) {
+	// do we respect drupal's throttle module?
+	if (variable_get('mm_throttle_use_throttle', 'false')) {
+		// If the site is currently throttling disable run
+		if ($throttle = module_invoke('throttle', 'status')) {
+			return true;
+		}
+	}
+
+	// check configurations settings if this configuration should be run on cron
+	// if not, disable run
+	if (! (isset($configurationv->config->mma_cron_run) ? $configuration->config->mma_cron_run : variable_get('mma_cron_run', true))) {
+	  return true;
+	}
+
+  // now we check and see there is a hard override of this configuration
+  // in the settings.php file
+  if (variable_get("media_mover_cron_off_". $configuration->cid, false)) {
+  	return true;
+  }
+}
+
+
+/**
+ * handles CPU throttling on process actions
+ *
+ * @param object $configuration
+ */
+function mm_monitor_process_run($configuration) {
+  // should we check the cpu load?
+  if (variable_get('mma_cpu_limit', false)) {
+    $load = mm_monitor_cpu_load();
+    if ($load > variable_get('mma_cpu_limit_threshold', 4)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+
+/**
+ * get the current CPU load
+ *
+ * @return real
+ */
+function mm_monitor_cpu_load() {
+
+  exec('w' ." 2>&1", $command_output);
+
+
+  // split the output
+  $pattern = "/.*load averages: ([0-9\.]*) ([0-9\.]*) ([0-9\.]*)/";
+  preg_match($pattern, $command_output, $matches);
+  return $matches[variable_get('mma_cpu_limit_sample', 2)];
+}
+
+
+/* ******************************************* */
+/* Batch processing and multi-machine stuff    */
+/* ******************************************* */
+
+
+/**
+ * This is called by machines to get new jobs and
+ * register as availabe servers
+ * @param $sid
+ *   string, unique server id
+ */
+function mmm_monitor_batch ($sid = null) {
+  // check the $sid
+  $sid = mm_monitor_get_server_sid($sid);
+
+  // register the calling server
+  mm_monitor_register_server($sid);
+
+  // get this server's configuration
+  $configuration = mm_monitor_server_configuration($sid);
+print_r($configuration);
+  // now hand off to media mover processing
+
+  return;
+}
+
+
+/**
+ * Gets the configuration for this server
+ * @param $sid
+ * @return object
+ */
+function mm_monitor_server_configuration($sid) {
+  return unserialize(db_result(db_query('SELECT configuration FROM {media_mover_server_list} WHERE sid = "%s"', $sid)));
+}
+
+
+/**
+ * Register the server
+ * @param $sid
+ *   string, server id
+ * @param $alive
+ * @param $enable
+ * @return object
+ */
+function mm_monitor_register_server($sid, $alive = mm_monitor_STATUS_ALIVE, $enable = mm_monitor_STATUS_ENABLED) {
+  // is this server registered?
+  if (! $result = db_result(db_query('SELECT status FROM {media_mover_server_list} WHERE sid = "%s"', $sid))) {
+    // get the default settings to use
+    $configuration = variable_get('mmrc_default_server_mm_configurations', array());
+    db_query('INSERT INTO {media_mover_server_list} (sid, time, status, enabled, configuration) VALUES ("%s", %d, "%s", "%s", "%s")',
+      $sid, time(), mm_monitor_STATUS_ALIVE, $enable, serialize($configuration));
+  }
+  else {
+    // update the last time registration time
+    db_query('UPDATE {media_mover_server_list} SET time = %d WHERE sid = "%s"', time(), $sid);
+  }
+}
+
+
+/**
+ * Ensure we have a sid to deal with
+ * @param $sid
+ * @return string
+ */
+function mm_monitor_get_server_sid($sid) {
+  // find the sid if it isn't present
+  if (! $sid) {
+    global $conf;
+    // do we have an identifier for this machine in the settings.php?
+    if (! $sid = $conf['mm_monitor_sid']) {
+      // use the server address as a fall back, not great but usable
+      $sid = $_SERVER['SERVER_ADDR'];
+    }
+  }
+  return $sid;
+}
+
+
+/**
+ * Get a array servers by status if requested
+ * @param $status
+ * @return array
+ */
+function mm_monitor_server_list($status = null) {
+  if ($status) {
+    $status = " WHERE enabled = '$status' ";
+  }
+  $return = array();
+  $results = db_query('SELECT * FROM {media_mover_server_list}'. $status);
+  while ($result = db_fetch_object($results)) {
+    // unserialize the configuration
+    $result->configuration = unserialize($result->configuration);
+    $return[$result->sid] = $result;
+  }
+  if (count($return) ) {
+    return $return;
+  }
+  return false;
+}
+
+
+/**
+ * Get a count of servers by status if requested
+ * @param $status
+ * @return int
+ */
+function mm_monitor_server_list_count($status = null) {
+  if ($status) {
+    $status = " AND status = '$status' ";
+  }
+  $results = db_query('SELECT sid FROM {media_mover_server_list}'. $status);
+  while ($result = db_fetch_array($results)) {
+    $return[] = $result;
+  }
+  if (count($return)) {
+    return $return;
+  }
+  return false;
+}
+
+
+/**
+ * Expires servers which have not recently registered
+ */
+function mm_monitor_expire_servers() {
+  // get the expiration time
+  $time = time() - (variable_get('mm_monitor_server_expire_time', 30) * 60);
+  db_query('UPDATE {media_mover_server_list} SET status = "%s" WHERE date < %d', mm_monitor_STATUS_EXPIRED, $time);
+}
+
+
+/**
+ * Controls who can run the batch processing
+ * @TODO figure out what todo here
+ * @return unknown_type
+ */
+function mm_monitor_restrict_access() {
+
+ return true;
+}
+
+
+/* ******************************************* */
+/* Administration functions */
+/* ******************************************* */
+
+/**
+ * admin form displayed on admin/media_mover/settings for run control settings
+ *
+ * @return array
+ *   drupal form
+ */
+function mm_monitor_settings_form () {
+	$form['mm_monitor'] = array (
+	  '#type' => 'fieldset',
+	  '#title' => t('Run control'),
+	  '#description' => t('Limit Media Mover configurations by CPU levels, Cron settings, and other options'),
+	  '#collapsible' => true,
+	  '#collapsed' => true,
+	);
+	$form['mm_monitor']['mma_cron_run'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Run Media Mover on cron runs'),
+    '#default_value' => variable_get('mma_cron_run', true),
+    '#description' => t('By checking this, Media Mover will run when cron.php is called. This is helpful when you don\'t want to have harvest operations running automatically. Default is on.'),
+  );
+	$form['mm_monitor']['cpu']['mma_cpu_limit'] = array(
+    '#title' => t('Stop on high load'),
+    '#type' => 'checkbox',
+    '#default_value' => variable_get('mma_cpu_limit', false),
+    '#description' => t('Media Mover can check the current system load on Linux systems and not run when load reaches the set threshold. Default is off'),
+  );
+
+  $options = drupal_map_assoc(array(1,2,3,4,5,5.5,6,6.5,7,7.5,8,8.5,9,10));
+  $options = array_combine (array_values($options), $options);
+  $form['mm_monitor']['cpu']['mma_cpu_limit_threshold'] = array(
+    '#title' => t('CPU threshold'),
+    '#type' => 'select',
+    '#options' => $options,
+    '#default_value' => variable_get('mma_cpu_limit_threshold', 4),
+    '#description' => t('Media Mover can check the current system load and not run when load reaches the set threshold.'),
+  );
+
+  $options = array(1 => 1, 2 => 5, 3 => 15);
+  $form['mm_monitor']['cpu']['mma_cpu_limit_sample'] = array(
+    '#title' => t('CPU sample'),
+    '#type' => 'select',
+    '#options' => $options,
+    '#default_value' => variable_get('mma_cpu_limit_sample', 2),
+    '#description' => t('Select the 1, 5, 15 minute load average to use as the threshold.'),
+  );
+  return $form;
+}
+
+
+/**
+ * Front end for the server distribution stuff
+ * @return unknown_type
+ */
+function mm_monitor_server_settings_form() {
+  // if there are no servers enabled, enable this one because it maybe the first time through
+  if (! mm_monitor_server_list_count()) {
+    mm_monitor_register_server();
+  }
+
+  // default settings
+  $form['defaults'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Default settings'),
+    '#description' => t('These settings will be inherited by any new servers that register.'),
+    '#collapsible' => true,
+    '#collapsed' => true,
+  );
+
+  // get a list of configurations
+  $configurations = media_mover_api_get_configurations();
+  foreach ($configurations as $configuration ) {
+    $options[$configuration->cid] = t('Media Mover: ') . $configuration->name;
+  }
+  $form['defaults']['mmrc_default_server_mm_configurations'] = array(
+    '#title' => t('Media Mover configurations to run'),
+    '#type' => 'select',
+    '#multiple' => true,
+    '#options' => $options,
+    '#default_value' => variable_get('mmrc_default_server_mm_configurations', array_keys($options)),
+  );
+
+  // @TODO should be able to determine what parts of a configuration can be run
+
+  // build the time array
+  $time = array(1, 3, 5, 7, 10, 15, 30, 45, 60, 90, 120, 720, 1440);
+  $time = array_combine (array_values($time), $time);
+  $time[0] = t('No timeout');
+
+  // set the amount of time between registrations for each server
+  $form['defaults']['mmrc_server_expire_time'] = array(
+    '#title' => t('Server expiration'),
+    '#type' => 'select',
+    '#options' => $time,
+    '#default_value' => variable_get('mmrc_server_expire_time', 30),
+    '#description' => t('Set the expiration time of the servers (in minutes). When a server fails to register after this amount of time, it will no longer be considered an active server in your list.'),
+  );
+
+
+
+  // server list container
+  $form['server_list'] = array(
+    '#theme' => 'mm_monitor_server_list'
+  );
+
+  // get a list of the servers to enable or disable
+  if ($servers = mm_monitor_server_list()) {
+    foreach($servers as $server) {
+      $form['server_list'][$server->sid]['enabled'] = array(
+        '#type' => 'checkbox',
+        '#default_value' => $server->enabled,
+        '#title' => $server->sid
+      );
+
+      $form['server_list'][$server->sid]['configuration'] = array(
+        '#title' => t('Run configurations'),
+        '#type' => 'select',
+        '#multiple' => true,
+        '#options' => $options,
+        '#default_value' => variable_get('mmrc_default_server_mm_configurations', array_keys($options)),
+      );
+      // add the full server to the form so we can manipulate it in the from
+      $form['server_list'][$server->sid]['#sid'] = $server->sid;
+      $form['server_list'][$server->sid]['#alive'] = $server->alive;
+      $form['server_list'][$server->sid]['#status'] = $server->status;
+      $form['server_list'][$server->sid]['#time'] = $server->time;
+    }
+  }
+
+
+  return system_settings_form($form);
+}
+
+
+/* ******************************************* */
+/* Theme functions                             */
+/* ******************************************* */
+
+
+/**
+ * Theme the server list table
+ * @param $form
+ * @return strong
+ */
+function theme_mm_monitor_server_list(&$form) {
+  foreach (element_children($form) as $key) {
+    //print_r($form[$key]);
+    $rows[] = array(
+      // checkbox
+      drupal_render($form[$key]['enabled']),
+      // status
+      $form[$key]['#status'],
+      // last registration
+      format_date($form[$key]['#time'], 'short'),
+      // configuration
+      drupal_render($form[$key]['configuration']),
+      // remove link
+      l(t('TODO Remove'), 'admin/build/media_mover')
+    );
+  }
+  $header = array( t('Enabled'), t('Status'), t('Last registration'), t('Configurations'), t('Remove'));
+  return theme('table', $header, $rows);
+}

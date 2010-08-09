@@ -1,0 +1,451 @@
+<?php
+
+// $Id: mm_ftp.module,v 1.1.2.2 2010/02/23 05:18:01 arthuregg Exp $;
+
+/**
+ * @file
+ * This module allows for harvesting from FTP servers with media mover
+ */
+
+// define the token length
+define('MM_FTP_TOKEN_LENGTH', 6);
+
+/* ************************************************ */
+/* DRUPAL hook functions                            */
+/* ************************************************ */
+
+/**
+ * Implements hook_perm()
+ */
+function mm_ftp_perm() {
+  return array('upload files to ftp');
+}
+
+
+/**
+ * Implements hook_menu()
+ */
+function mm_ftp_menu() {
+  $items = array();
+  $items['ftp_token'] = array(
+    'title' => 'Get an FTP token',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mm_ftp_token_ftp_form'),
+    'access arguments' => array('upload files to ftp'),
+    'file' => 'mm_ftp_token.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/build/media_mover/settings/mm_ftp'] = array(
+    'title' => 'FTP Tokens',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mm_ftp_admin_token', TRUE),
+    'access' => array('administer media_mover'),
+    'file' => 'mm_ftp_token.inc',
+    'type' => MENU_NORMAL_ITEM,
+  );
+  $items['admin/build/media_mover/tests/mm_ftp'] = array(
+    'title' => 'FTP Test',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('mm_ftp_test_form'),
+    'access arguments' => array('administer media_mover'),
+    'file' => 'mm_ftp_test.inc',
+    'type' => MENU_LOCAL_TASK,
+  );
+  return $items;
+}
+
+
+/**
+ * Implementation of hook_help().
+ */
+function mm_ftp_help($path, $arg) {
+  switch ($path) {
+    case 'admin/modules#description' :
+      return t('Harvest module for Media Mover. Allows users to retrieve files through FTP for furthur processing.');
+  }
+  return;
+}
+
+
+/**
+ * Implementation of hook_cron
+ * cleans up the token db
+ */
+function mm_ftp_cron() {
+  // check the database for expired tokens
+  $date = time() - (variable_get('mm_ftp_token_duration', 2880) * 60);
+  db_query('DELETE FROM {mm_ftp_tokens} WHERE date < %d', $date);
+}
+
+
+
+/* ************************************************ */
+/* Conrib Hooks                                     */
+/* ************************************************ */
+
+/**
+ * Implementation of media_mover hook
+ */
+function mm_ftp_media_mover() {
+  $items = array();
+  $items['harvest'] = array(
+    'description' => t('Harvest files from an FTP server'),
+    'callback' => 'mm_ftp_harvest',
+    'configuration' => 'mm_ftp_harvest_config',
+    'harvest' => TRUE,
+  );
+  $items['store'] = array(
+    'description' => t('Store files on an FTP server'),
+    'callback' => 'mm_ftp_storage',
+    'configuration' => 'mm_ftp_storage_config',
+  );
+  return $items;
+}
+
+
+/**
+ * Implementation of hook_token_values().
+ */
+function mm_ftp_token_values($type, $object = NULL) {
+  $values = array();
+  switch ($type) {
+    case 'mm_config':
+      if (!is_array($object)) {
+        return array();
+      }
+      $config = $object;
+      foreach ($config as $k => $v) {
+        $values[$k] = $v;
+      }
+    break;
+  }
+  return $values;
+}
+
+
+/* ************************************************ */
+/* Configuration                                    */
+/* ************************************************ */
+
+
+/**
+ * Config form for FTP harvest settings
+ * @param $step
+ *  object, media mover step
+ * @return array
+ *   Drupal form array
+ */
+function mm_ftp_harvest_config($step) {
+  // Get the FTP default settings form
+  $form = mm_ftp_default_step_form($step);
+
+  $form['mm_ftp_conf']['associate_file_with_user'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Associate Files with User'),
+    '#description' => t('Three mechanisms will be used to attempt to associate a user with a file:
+      the parent directory matches a drupal user name, the creator of the file matches a Drupal
+      user name, or the file has a token which is associated with a user.'),
+    '#default_value' => $step->settings['associate_file_with_user'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_harvest_without_tokens'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Harvest files without tokens'),
+    '#description' => t('If a file on the remote server does not have a valid token, it will still be harvested. This is useful if you are using an FTP server with non-user content.'),
+    '#default_value' => $step->settings['mm_ftp_harvest_without_tokens'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_delete_files'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Delete files'),
+    '#options' => array(
+      'all_files' => t('Delete all files (overrides all other options).'),
+      'harvested_files' => t('Delete all harvested files.'),
+      'no_user' => t('Delete files not associated with users.'),
+      'filetype' => t('Delete files that do not match the specified file types.')
+    ),
+    '#description' => t('Determines if remote files are deleted.'),
+    '#default_value' => $step->settings['mm_ftp_delete_files'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_allowed_files'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Allowed File Types'),
+    '#description' => t('A list of allowed file types, separated by a space'),
+    '#default_value' => $step->settings['mm_ftp_allowed_files'] ? $step->settings['mm_ftp_allowed_files'] : variable_get('upload_extensions_default', 'mov mp4 mp3 avi 3gp 3g2 divx xvid wmv asf mpg mpeg mpeg4 jpeg'),
+  );
+  $form['mm_ftp_conf']['mime_types'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Allowed Mime Types'),
+    '#description' => t('A list of allowed file mime types. This is an additional
+      security step, however it does not guarentee that a malicious user can still
+      get a different kind of file onto the server. Space sperated list. You should
+      probably not change these values. This cannot be left blank'),
+    '#default_value' => $step->settings['mime_types'] ? $step->settings['mime_types'] : 'video image audio application/octet-stream',
+  );
+  return $form;
+}
+
+
+/**
+ * Config form for FTP storage settings
+ * @param $step
+ *  object, media mover step object
+ * @return array
+ *   Drupal form array
+ */
+function mm_ftp_storage_config($step) {
+  $form = mm_ftp_default_step_form($step);
+  // add a disclaimer for file handling
+  $form['mm_ftp_conf']['#description'] = t('When storing files on an FTP server, Media Mover is limited in the manipulations that it can perform on files- largely you can only perform changes to nodes at this point.');
+  // set the ftp url
+  $form['mm_ftp_conf']['mm_ftp_url'] = array(
+    '#type' => 'textfield',
+    '#title' => t('URL prefix'),
+    '#description' => t('When storing files on a FTP server you can set a web or FTP accessible path to your files. Use <strong>http://yourserver.com/your/dir/</strong> to create the path. The file name will be append to the end of the URI. If your files are not web accessible, leave this field empty and the local file path will be used instead.'),
+    '#default_value' => $step->settings['mm_ftp_url']
+  );
+
+  return $form;
+}
+
+/**
+ * Default FTP step options. Helper for
+ * harvest and storage forms
+ *
+ * @param $step
+ *   object, media mover step
+ * @return array()
+ */
+function mm_ftp_default_step_form($step) {
+  $form['mm_ftp_conf'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('FTP Configuration'),
+    '#collapsed' => FALSE,
+  );
+  $form['mm_ftp_conf']['mm_ftp_user'] = array(
+    '#title' => t('FTP username'),
+    '#type' => 'textfield',
+    '#default_value' => $step->settings['mm_ftp_user'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_pass'] = array(
+    '#title' => t('FTP password'),
+    '#type' => 'textfield',
+    '#default_value' => $step->settings['mm_ftp_pass'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_host'] = array(
+    '#title' => t('FTP hostname'),
+    '#type' => 'textfield',
+    '#default_value' => $step->settings['mm_ftp_host'],
+  );
+  $form['mm_ftp_conf']['mm_ftp_dir'] = array(
+    '#title' => t('FTP directory'),
+    '#type' => 'textfield',
+    '#description' => t('Enter "." for the homedir. No trailing slash.'),
+    '#default_value' => $step->settings['mm_ftp_dir'] ? $step->settings['mm_ftp_dir'] : '.',
+  );
+  return $form;
+}
+
+
+/* ************************************************ */
+/* INTERNAL FUNCTIONS                               */
+/* ************************************************ */
+
+
+/**
+ * Make the FTP connection
+ * @param $configuration
+ *   array, media mover configuration data
+ * @param $display
+ *   boolean, should errors be displayed or logged?
+ * @return array
+ *   ftp connection data array
+ */
+function mm_ftp_connect($configuration, $display = FALSE) {
+  $connection = array();
+  // build the ftp connection
+  $connection['ftp_connection'] = ftp_connect($configuration['mm_ftp_host']);
+  $connection['ftp_login'] = ftp_login($connection['ftp_connection'], $configuration['mm_ftp_user'], $configuration['mm_ftp_pass']);
+
+  // check the connection to the server
+  if (! $connection['ftp_connection']) {
+    $message = 'Unable to connect to server %server';
+    $params = array('%server' => $configuration['mm_ftp_host']);
+  }
+  elseif (! $connection['ftp_login']) {
+    $message = 'Unable to login to server %server with username %user';
+    $params =  array('%server' => $configuration['mm_ftp_host'], '%user' => $configuration['mm_ftp_user']);
+  }
+  // did we have an error condition?
+  if ($message) {
+    watchdog('mm_ftp', $message, $params, WATCHDOG_ERROR);
+    return;
+  }
+  // no error, return the connection
+  return $connection;
+}
+
+
+/**
+ * Harvests files from a remote FTP server
+ * @param unknown_type $step
+ * @return unknown_type
+ */
+function mm_ftp_harvest($step) {
+  require_once('mm_ftp.inc');
+
+  // Can we connect to the FTP server?
+  if (! $connection = mm_ftp_connect($step->settings)) {
+    return;
+  }
+
+  // extract out the connection
+  extract($connection);
+
+  if ($harvest_list = mm_ftp_get_file_list($ftp_connection, $step->settings['mm_ftp_dir'])) {
+
+    foreach ($harvest_list as $harvest_file) {
+      $no_harvest = FALSE;
+      $delete = FALSE;
+
+      // Should we try to associate this file with a user?
+      if ($step->settings['associate_file_with_user']) {
+        // Do not harvest files which are not associated with a user
+        if (! mm_ftp_file_associate_user($harvest_file)) {
+          $no_harvest = TRUE;
+          // Delete this file if it is not associated with a user
+          if ($step->settings['mm_ftp_delete_files']['no_user']) {
+            $delete = TRUE;
+          }
+        }
+      }
+
+      // Does this file match the allowed file types?
+      if (strpos(pathinfo($file['filepath'], PATHINFO_EXTENSION), $step->settings['mm_ftp_allowed_files']) === FALSE) {
+        $no_harvest = TRUE;
+        // Should we delete files that do not match allowed file types?
+        if ($step->settings['mm_ftp_delete_files']['file_types']) {
+          $delete = TRUE;
+        }
+      }
+
+      // Should we delete files once the are harvested?
+      if ($step->settings['mm_ftp_delete_files']['harvested_files']) {
+        $delete = TRUE;
+      }
+
+      // Option to delete all files overides all other options
+      if ($step->settings['mm_ftp_delete_files']['all_files']) {
+        $delete = TRUE;
+      }
+
+      // Has any setting told us not to harvest this file?
+      if (! $no_harvest) {
+        // Get the file
+        if ($file = mmm_ftp_get_file($ftp_connection, $step, $harvest_file)) {
+          // If we have a UID, associate it with the file
+          if (isset($file['uid'])) {
+            $file->uid = $file['uid'];
+          }
+          $files[] = $file;
+        }
+      }
+
+      // Should we delete this file now that we have examined it?
+      if ($delete) {
+        mm_ftp_delete_file($harvest_file);
+      }
+    }
+  }
+  ftp_close($ftp_connection);
+  return $files;
+}
+
+
+
+/**
+ * Does the storage operation of the current file
+ * @param $step
+ *   object, media mover step object
+ * @param $file
+ *   object, media mover file
+ * @return boolean - was this successful or not?
+ */
+function mm_ftp_storage($step, $file) {
+  require_once('mm_ftp.inc');
+    // Can we connect to the FTP server?
+  if (! $connection = mm_ftp_connect($step->settings)) {
+    return;
+  }
+
+  // extract out the connection
+  extract($connection);
+
+  // Build the FTP file path. We use a time stamp on
+  // the file to help ensure uniqueness. This is not a
+  // guarentee, but is highly unlikely that we will have
+  // a name space collision.
+  $remote_file_name = pathinfo($file->filepath, PATHINFO_FILENAME) . '.' . time() . '.' . pathinfo($file->filepath, PATHINFO_EXTENSION);
+  $remote_file_name = $step->settings['mm_ftp_dir'] . '/' . $remote_file_name;
+
+  // Get the result, string if sucess, FALSE if failed
+  $file_path = mm_ftp_put_file($ftp_connection, $file->filepath, $remote_file_name);
+
+  ftp_close($ftp_connection);
+  return $file_path;
+}
+
+/* ************************************************ */
+/* Pages and forms                                  */
+/* ************************************************ */
+
+
+
+
+/**
+ * Outbound mail functions
+ *
+ * @param unknown_type $key
+ * @param unknown_type $message
+ * @param unknown_type $params
+ */
+function mm_ftp_mail($key, &$message, $params) {
+  // create the body
+  // @TODO implement real token replacement
+  $body = variable_get('mm_ftp_email_text', t('Your token is: [token]'));
+  $search = array('[token]', '[user name]', '[site name]', '[site url]');
+  $replace = array($params['token'], $user->name, variable_get('site_name', '' ), url('', array('absolute' => TRUE) ));
+  $body = str_replace($search, $replace, $body);
+
+  if ($key == 'ftp_token') {
+    $message['subject'] = t('[!sitename] Your FTP token', array('!sitename' => variable_get('site_name', 'Drupal')));
+    $message['body'] = $body;
+  }
+}
+
+
+/**
+ * This attempts to associate a remote file with
+ * a Drupal user
+ * @param $file
+ *   array
+ * @return int, uid or FALSE
+ */
+function mm_ftp_file_associate_user(&$file) {
+  // Get the parent directory
+  $directories = explode('/', $file['filepath']);
+  if (count($directories) > 1) {
+    $directory_name = array_pop($directories);
+  }
+  // Try to find this directory_name or file creator as a UID
+  if ($uid = db_result(db_query("SELECT uid FROM {users} WHERE name = '%s' OR name = '%s'", $directory_name, $file['creator']))) {
+    $file['uid'] = $uid;
+    return TRUE;
+  }
+
+  // Now look for a token on the file
+  require_once('mm_ftp_token.inc');
+  if (mm_ftp_token_check($file)) {
+    return TRUE;
+  }
+
+  return FALSE;
+}

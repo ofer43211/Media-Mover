@@ -1,0 +1,7 @@
+; $Id: mm_node.info,v 1.1.2.1 2009/10/17 02:32:20 arthuregg Exp $
+name = Media Mover Node
+description = Media Mover Node Operations
+package = "Media Mover"
+dependencies[] = media_mover_api
+dependencies[] = upload
+core=6.x

@@ -1,0 +1,6 @@
+; $Id: mm_auto_run.info,v 1.1.2.1 2009/10/17 02:32:19 arthuregg Exp $
+name = Media Mover Auto Run
+description = Auto run specific Media Mover configurations when a node is updated or inserted
+package = "Media Mover"
+dependencies[] = media_mover_api 
+core = 6.x

@@ -1,0 +1,8 @@
+<?php
+
+// $Id: mm_node.install,v 1.1.2.2 2010/02/23 06:12:26 arthuregg Exp $
+
+/**
+ * @file
+ * Install file
+ */

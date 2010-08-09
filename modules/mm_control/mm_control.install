@@ -1,0 +1,35 @@
+<?php
+
+// $Id: mm_control.install,v 1.1.2.1 2010/04/12 01:46:41 arthuregg Exp $
+
+/**
+ * @file
+ * Installation for run control
+ */
+
+
+/**
+ * install the token table
+ */
+function mm_control_install() {
+  // Create tables.
+  drupal_install_schema('mm_control');
+}
+
+
+/**
+ * Implementation of hook_uninstall
+ * deletes all media mover tables
+ */
+function mm_control_uninstall() {
+  drupal_uninstall_schema('mm_control');
+}
+
+
+/**
+ * Implementation of hook_schema()
+ */
+function mm_control_schema() {
+  $schema = array();
+  return $schema;
+}

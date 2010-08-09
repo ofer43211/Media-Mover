@@ -1,0 +1,8 @@
+;$Id: mm_token.info,v 1.1.2.1 2009/10/17 02:32:21 arthuregg Exp $
+name = Media Mover API Token
+description = Token implementation for Media Mover
+package = "Media Mover"
+core= 6.x
+dependencies[] = token
+dependencies[] = media_mover_api
+

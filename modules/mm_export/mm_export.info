@@ -1,0 +1,7 @@
+; $Id: mm_export.info,v 1.1.2.1 2010/02/13 21:37:17 arthuregg Exp $
+name = "Media Mover Exporter"
+description = Provides export/import for Media Mover configurations and steps, as well as Features support.
+package = "Media Mover"
+core = 6.x
+php = 5.0
+dependencies[] = "ctools"

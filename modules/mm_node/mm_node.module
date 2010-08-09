@@ -1,0 +1,874 @@
+<?php
+// $Id: mm_node.module,v 1.1.2.21 2010/05/14 12:05:45 arthuregg Exp $
+
+/**
+ * @file
+ * This file implements media mover functions related to nodes.
+ */
+
+
+/* ********************************************** */
+/* Drupal hooks                                   */
+/* ********************************************** */
+
+/**
+ * Implements hook_nodeapi().
+ *
+ * @ingroup drupal_hooks
+ */
+function mm_node_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
+  // include the node functions
+  require_once('mm_node_nodes.inc');
+
+  switch ($op) {
+
+    case 'insert':
+      mm_node_translation_insert($node);
+    break;
+
+    case "load":
+      if ($media_mover = mm_node_files_attach($node->nid)) {
+        return array('media_mover' => $media_mover);
+      }
+    break;
+
+    case "view":
+      // Add the attachments list to node body
+      // @TODO fix the theming function, check to see if this should be content instead
+      if (count($node->media_mover)) {
+        $node->body .= theme('media_mover_files', $node->media_mover);
+      }
+    break;
+
+    case "delete":
+      // invoke MM modules here and delete files associated with this node
+      mm_node_files_delete($node);
+    break;
+
+    // rss feed support
+    // @TODO is this even a good idea?
+    case 'rss item':
+      return mm_node_rss($node);
+    break;
+
+    // clear cache and delete files
+    case 'update':
+      mm_node_update($node);
+    break;
+  }
+}
+
+
+/**
+ * Implementation of hook_form_alter().
+ *
+ * @ingroup drupal_hooks
+ * @param string $form_id
+ * @param array $form drupal form array
+ */
+function mm_node_form_alter(&$form, $form_state, $form_id) {
+  // Add the media mover files edit form if this node has MM files
+  if (user_access('view node media mover files') && $form['#id'] == 'node-form'  && $form['#node']->media_mover) {
+    mm_node_files_edit_form($form);
+  }
+}
+
+
+/**
+ * Implements hook_perm().
+ * @return $perm
+ *   array
+ */
+function mm_node_perm() {
+  return array('view node media mover files');
+}
+
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ * Alter the node deletion form to alert the user that they may delete MM content
+ *
+ * @param unknown_type $form
+ * @param unknown_type $form_state
+ * @param unknown_type $form_id
+ */
+function mm_node_form_node_delete_confirm_alter(&$form, $form_state, $form_id) {
+  // check if there is any media mover content
+  // @TODO should check better parameters here
+  if ($node_mm_files = $form['#parameters'][2]->media_mover ) {
+    $files = array();
+    foreach ($node_mm_files as $cid => $mmfiles) {
+      $files[] = basename($mmfiles[0]['complete_file']);
+    }
+    $form['media_mover'] = array(
+      '#type' => 'markup',
+      '#title' => t('Media Mover files'),
+      '#value' => t('If you delete this node, you will also delete these Media Mover files: %files', array('%files' => implode(', ', $files))),
+    );
+    // @TODO add submit handler here
+  }
+}
+
+
+/**
+ * Implementation of hook_theme().
+ * @TODO these theme functions should be fleshed out
+ */
+function mm_node_theme() {
+  return array(
+    'mm_node_files_view' => array(
+      'arguments' => array('element' => NULL),
+      'file' => 'mm_node_theme.inc',
+    ),
+    'mm_node_files_edit' => array(
+      'arguments' => array('form' => NULL),
+      'file' => 'mm_node_theme.inc',
+    ),
+  );
+}
+
+/* ********************************************** */
+/* Contrib Hooks                                  */
+/* ********************************************** */
+
+/**
+ * Implementation of hook_media_mover().
+ * @return array
+ */
+function mm_node_media_mover() {
+  $items = array();
+  $items['drupal_upload'] = array(
+    'description' => t('Select Drupal uploaded files'),
+    'configuration' => 'mm_node_config_harvest',
+    'callback' => 'mm_node_upload_harvest',
+    'harvest' => TRUE,
+    'harvest_from_node' => TRUE,
+  );
+  $items['set_node_status'] = array(
+    'description' => t('Set node status'),
+    'configuration' => 'mm_node_config_complete',
+    'callback' => 'mm_node_complete',
+  );
+  $items['save_as_node'] = array(
+    'description' => t('Save data as a node'),
+    'configuration' => 'mm_node_config_save_node',
+    'callback' => 'mm_node_node_save',
+  );
+  $items['attach_to_node'] = array(
+    'description' => t('Attach file to node'),
+    'callback' => 'mm_node_attach_file',
+  );
+  $items['mm_node_save_to_files'] = array(
+    'description' => t('Save as Drupal file'),
+    'callback' => 'mm_node_save_as_drupal_file',
+  );
+  return $items;
+}
+
+
+/* ************************************************** */
+/* Media Mover: Media Mover config & admin  functions */
+/* ************************************************** */
+
+
+/**
+ * Config config form for media mover
+ * creates the options for each configuration instance
+ *
+ * @param $configuration
+ *   array, configuration array
+ * @return array
+ */
+function mm_node_config_harvest($step) {
+  $form["mm_harvest_conf"] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Harvest from Drupal node files'),
+    '#description' => t('This module harvests files attached to nodes that have been created on the site.'),
+    '#collapsed' => FALSE,
+  );
+
+  // do we have any node types in the system?
+  if ($types = node_get_types() ) {
+    foreach ($types as $type) {
+      $node_types[$type->type] = $type->name;
+    }
+
+    $form['mm_harvest_conf']['mm_node_types'] = array(
+     '#type' => 'select',
+     '#title' => t('Choose files from these content types'),
+     '#description' => t('Choose content types you wish to search for video files to convert. You can select multiple file types.'),
+     '#options' => $node_types,
+     '#multiple' => TRUE,
+     '#default_value' => $step->settings['mm_node_types'],
+    );
+
+    $form['mm_harvest_conf']['file_types'] = array(
+      '#title' => t('File types'),
+      '#type' => 'textfield',
+      '#default_value' => isset($step->settings['file_types']) ? $step->settings['file_types'] : 'avi mov wmv mpeg mp4 mpeg2 dv 3gp 3g2 mpeg4',
+      '#description' => t('Space seperated list of file types that can be harvested. These are file extensions and are values like "avi mov wmv mpeg mp4 mpeg2 dv 3gp 3g2 mpeg4". Leave blank to harvest any file type.'),
+    );
+  }
+  else {
+    $form['mm_harvest_conf']['markup'] = array(
+      '#type' => 'markup',
+      '#value' => t('Sorry, there are no node types defined in the system. Please create one first.'),
+    );
+  }
+  return $form;
+}
+
+
+
+
+/**
+ * Config config form for media mover
+ * creates the options for each configuration instance
+ * @param $action
+ *   Object, complete action data
+ * @return array, Drupal form array
+ *
+ */
+function mm_node_config_complete($step) {
+  $options = array('published' => t('Published'),
+    'revision' => t('New Revision'),
+    'sticky' => t('Sticky at top of lists'),
+    'promoted to front page' => t('Promoted to front page'),
+  );
+  $form['complete']["complete_conditions"] = array(
+    '#title' => t('Node status'),
+    '#type' => 'select',
+    '#multiple' => TRUE,
+    '#options' => $options,
+    '#default_value' => $step->settings['complete_conditions'],
+    '#description' => t('Set the status of the node post completion'),
+    );
+  return $form;
+}
+
+
+/**
+ * Configuration form for the storage option
+ * @param $step
+ *   Object, media mover step object
+ * @return $form
+ *   Array, Drupal form array
+ */
+function mm_node_config_save_node($step) {
+  drupal_add_js(drupal_get_path('module', 'mm_node') . '/mm_node.js');
+  $form['storage'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Node storage configuration'),
+    '#collapsed' => FALSE,
+    '#description' => t('This module will try to do a best guess of harvested data and save this to a node.'),
+  );
+
+  // get content types
+  foreach (node_get_types() as $type) {
+    $options[$type->type] = $type->name;
+  }
+  $form['storage']['node_save_type'] = array(
+    '#title' => t('Default node type'),
+    '#type' => 'select',
+    '#options' => $options,
+    '#default_value' => $step->settings['node_save_type'],
+    '#description' => t('Save the harvested and processed data on this node type'),
+  );
+
+  // language options
+  if (function_exists('locale_language_list')) {
+    if ($options = locale_language_list()) {
+      $form['storage']['node_save_language'] = array(
+        '#type' => 'select',
+        '#title' => t('Save node in language'),
+        '#description' => t('Save the node in this language when creating it'),
+        '#options' => $options['name'],
+        '#default_value' => $step->settings['node_save_language'],
+      );
+    }
+  }
+
+  $form['storage']['node_save_name'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Default author'),
+    '#maxlength' => 60,
+    '#autocomplete_path' => 'user/autocomplete',
+    '#default_value' => $step->settings['node_save_name'],
+    '#description' => t('If a user is not passed in, this will be the default author. Leave blank for anonymous'),
+    '#element_validate' => array('mm_node_config_save_node_validate'),
+  );
+
+  $form['storage']['node_title_options'] = array(
+    '#type' => 'radios',
+    '#title' => t('Title options'),
+    '#default_value' => $step->settings['node_title_options'] ? $step->settings['node_title_options'] : 'filename',
+    '#options' => array(
+      'filename' => t('Filename'),
+      'default' => t('Find title'),
+      'title' => t('Specify node title')
+    ),
+    '#description' => t('Chose how the title is set. "Find title" will look for a title passed by
+      a previous Media Mover action. If none is available, if you have specified a title, that
+      will be used, otherwise the filename will be used. If you specify a node title, that
+      will be used.'),
+  );
+
+  $form['storage']['node_title_default'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Default title'),
+    '#maxlength' => 60,
+    '#default_value' => $step->settings['node_title_default'],
+    '#description' => t('Set the default title to this value.'),
+    '#prefix' => '<div id="mm_node_title_default">',
+    '#suffix' => '</div>',
+  );
+
+  $form['storage']['node_body_default'] = array(
+    '#type' => 'textarea',
+    '#title' => t('Default body'),
+    '#default_value' => $step->settings['node_body_default'] ? $step->settings['node_body_default'] : t('This was created without any additional information'),
+    '#description' => t('If a body is not passed in, this will be the default node body.'),
+  );
+
+  $form['storage']['node_save_options'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Node options'),
+    '#options' => array(
+      'comment' => t('Enable comments'),
+      'status' => t('Published'),
+      'promoted' => t('Promoted to front page'),
+      'sticky' => t('Sticky at the top of lists'),
+      'attach_file' => t('Save files as node attachments'),
+      'list_file' => t('List file on node'),
+    ),
+    '#default_value' => $step->settings['node_save_options'] ? $step->settings['node_save_options'] : array(),
+  );
+
+  return $form;
+}
+
+
+/**
+ * Validation duties for the node save configuration
+ */
+function mm_node_config_save_node_validate($element, &$form_state) {
+  // is the path valid?
+  if (! $account = user_load(array('name' => $element['#value']))) {
+    form_error($element,  t('Sorry, the name you chose for a default node author was not valid.'));
+  }
+}
+
+
+/* ************************************************ */
+/* Media Mover: Media Mover action functions        */
+/* ************************************************ */
+
+
+/**
+ * Harvest files from Drupal attached files
+ *
+ * @param $step
+ *   Object, Media Mover step object
+ * @return $files
+ *   Array, array of file array data
+ */
+function mm_node_upload_harvest($step) {
+  // This builds a set of node types that is mysql friendly for n.type IN (  ...  )
+  if ($node_types = $step->settings['mm_node_types'] ) {
+    foreach ($node_types as $type) {
+      if ($type) {
+        $node_type_list[] = '"'. $type .'"';
+      }
+    }
+    $node_type_list = 'n.type IN ('. implode(', ', $node_type_list) .')';
+
+    // Select from specified file types
+    if ($step->settings['file_types']) {
+      $types = explode(' ', $step->settings['file_types']);
+      foreach ($types as $type) {
+        $conditions[] = "f.filepath LIKE '%%.$type'";
+      }
+      // build the SQL to check against the file types
+      $file_type_conditions = ' AND ('. implode(' OR ', $conditions) .')';
+    }
+
+    // are we harvesting from a specific NID ?
+    if (isset($step->parameters['nid'])) {
+      $harvest_conditions = ' AND n.nid = '. $step->parameters['nid'];
+    }
+    // otherwise we only look for nodes that are newer than the
+    // last time that we ran
+    else {
+      $harvest_conditions = ' AND n.changed > '. ($step->stop_time ? $step->stop_time : 0);
+    }
+
+    // get all potentially harvestable files
+    // select all files join with nodes of $node_type_list
+    // where node changed date is greater than last run start time
+    // query for all files that match these conditions. Use the n.vid
+    // to make sure we do not select files deleted from nodes.
+    $query = "SELECT f.*, n.nid FROM {files} f
+      LEFT JOIN {upload} u ON f.fid = u.fid
+      LEFT JOIN {node} n ON n.nid = u.nid
+      WHERE
+      ". $node_type_list ."
+      ". $file_type_conditions ."
+      ". $harvest_conditions ."
+      AND u.fid NOT IN (SELECT mmf.fid FROM {media_mover_files} mmf WHERE mmf.cid = '%s')
+      AND n.vid = u.vid
+      AND f.status = 1
+      AND f.timestamp > %d
+      ORDER BY n.changed DESC";
+
+    // now run the query
+    $results = db_query($query, $step->cid, $step->stop_time);
+    $files = array();
+    // take each result and add it to the output
+    while ($result = db_fetch_array($results)) {
+      // check to see if file exists
+      if (file_exists($result['filepath'])) {
+        // now we harvest file
+        $file['filepath'] = $result['filepath'];
+        $file['nid'] = $result['nid'];
+        $file['fid'] = $result['fid'];
+        $file['data']['user']->uid = $result['uid'];
+        $files[] = $result;
+      }
+    }
+    return $files;
+  }
+}
+
+
+/**
+ * Get list of files that match assumed criteria
+ * @param array $configuration
+ * @param array $file mm file array
+ * @return array
+ */
+function mm_node_complete($step, $file) {
+  // check and see if we have a NID
+  if (! $node = $file->node_get()) {
+    return FALSE;
+  }
+
+  // Load any CCK data
+  if (module_exists('content')) {
+    content_load();
+  }
+
+  $options = array();
+  if (isset($configuration['complete_conditions']['published'])) {
+    $options[] = 'status';
+  }
+  if (isset($configuration['complete_conditions']['revision'])) {
+    $options[] = 'revision';
+  }
+  if (isset($configuration['complete_conditions']['promoted to front page'])) {
+    $options[] = 'promote';
+  }
+  if (isset($configuration['complete_conditions']['sticky'])) {
+    $options[] = 'sticky';
+  }
+
+  if (count($options)) {
+    // get the node in question
+    foreach ($options as $option) {
+      if ($option == 'revision') {
+        $node->log = t('New revision created by Media Mover');
+      }
+      $node->{$option} = TRUE;
+    }
+    node_save($node);
+  }
+  return TRUE;
+}
+
+
+/**
+ * Stores the actual data as a node
+ * @param array $file
+ * @param array $configuration
+ * @ TODO finish up this functionality to deploy
+ *        requires creating the data store
+ */
+function mm_node_node_save($step, $file) {
+  // start building the node
+  $node = new stdClass();
+  // set node type
+  $node->type = $step->settings['node_save_type'];
+
+  // set the title
+  if ($file->data['node']->title && ! $step->settings['node_save_override']) {
+    $node->title = $file->data['node']->title;
+  }
+  else {
+    $node->title = $step->settings['node_title_default'];
+  }
+
+  // set the body
+  if ($file->data['node']->body) {
+    $node->body = $file->data['node']->body;
+  }
+  else {
+    $node->body = $step->settings['node_body_default'];
+  }
+
+  // if we have a language setting
+  if ($step->settings['node_save_language']) {
+    $node->language = $step->settings['node_save_language'];
+  }
+
+  // node options
+  $node->comment = $step->settings['node_save_options']['comment'] ? 2 : 0;
+  $node->status = $step->settings['node_save_options']['status'] ? 1 : 0;
+  $node->sticky = $step->settings['node_save_options']['sticky'] ? 1 : 0;
+  $node->promote = $step->settings['node_save_options']['promote'] ? 1 : 0;
+
+  // Now build the node author
+  $account = mm_node_map_user($file, $step);
+
+  // attach the user data
+  $node->uid = $account->uid;
+  $node->name = $account->name;
+  $node->mail = $account->mail;
+
+  // save the new node
+  node_save($node);
+
+  // now we have a $node->nid, we can save files
+  if ($step->settings['node_save_options']['attach_file']) {
+    $new_file = mm_node_save_drupal_file($step, $file->filepath, $node->uid);
+    $node->files[] = $new_file;
+    upload_save($node);
+    // make sure we return the correct file path
+    $filepath = $new_file->filepath;
+  }
+
+  // append the $nid to the $file for easy retreval
+  $file->nid = $node->nid;
+  // add the node data to the file object
+  $file->data['node'] = $node;
+  // make a log entry
+  watchdog('Media Mover Node', 'Created new node', array(), WATCHDOG_INFO, l($node->title, 'node/' . $node->nid));
+
+  // return the path on the file saved to the $node
+  return $filepath;
+}
+
+
+/**
+ * Attach a media mover file to a node
+ *
+ * @param $step
+ *   object, media mover step object
+ * @param $file
+ *   object, media mover file object
+ * @return string path to file
+ */
+function mm_node_attach_file($step, $file) {
+  // find out if there is any node data to work with
+  if (! $node = $file->node_get()) {
+    watchdog('mm_node', 'Failed to find a node to attach file !file', array('!file' => '<pre>' . print_r($file, TRUE) . '</pre>'), WATCHDOG_WARNING);
+    return FALSE;
+  }
+  // save the file
+  $new_file = mm_node_save_drupal_file($step, $file->filepath, $node->uid);
+  // attach the new file to the node
+  $node->files[] = $new_file;
+  // save the node
+  node_save($node);
+  // file name may have been altered in the saving process
+  return $new_file->filepath;
+}
+
+
+/**
+ * Saves the Media Mover filepath to the Drupal files table
+ * and returns the Drupal files table path
+ * @param $step
+ *   object, media mover step object
+ * @param $file
+ *   object, media mover file object
+ * @return string, filepath
+ */
+function mm_node_save_as_drupal_file($step, $file) {
+  $new_file = mm_node_save_drupal_file($step, $file->filepath);
+  return $new_file->filepath;
+}
+
+
+/**
+ * Saves the MM file to the drupal file table. Slightly customized version
+ * to avoid using upload_save and file_save_upload.
+ * @param object $node
+ *   drupal node object
+ * @param string $file_path
+ *   path to file
+ * @param array $configuration
+ * @param string $source
+ *   set the source of the file
+ * @return array
+ *   array of drupal file data
+ */
+function mm_node_save_drupal_file($step, $filepath, $uid = 0, $destination = NULL) {
+  // build the destination
+  if (! $destination) {
+    $destination = media_mover_api_dir_path($step->sid);
+  }
+  // copy the file to the new location
+  file_copy($filepath, $destination);
+  // build the file object
+  $file = new stdClass();
+  $file->new = TRUE;
+  $file->uid = $uid;
+  $file->filename = basename($filepath);
+  $file->filepath = $filepath;
+  $file->filemime = file_get_mimetype($filepath);
+  $file->filesize = filesize($filepath);
+  $file->timestamp = time();
+  $file->list = variable_get('upload_list_default', 1);
+  $file->status = 1;
+  // save the file
+  drupal_write_record('files', $file);
+  return $file;
+}
+
+
+/**
+ * removes references to files from files table where they were
+ * stored
+ * @ TODO this needs to be completed
+ */
+function mm_node_attach_file_delete($configuration, $job) {
+  // This needs to be built to funciton on a per file
+  // basis
+/*
+  // get all the files for this config
+  $files = media_mover_api_fetch_files($job->cid);
+
+  foreach($files as $file) {
+    // @TODO delete the file from the files db table
+    // db_queryd('DELETE * FROM {files} WHERE filepath = "%s"', $file['storage_file']);
+    // delete the actual file
+    if (is_file($file['storage_file'])){
+       $fh = fopen($file['storage_file'], 'w') or die("can't open file");
+       fclose($fh);
+        if (unlink( $file['storage_file'])) {
+          print "deleted";
+
+        }
+        else {
+          print "not deleted";
+        }
+
+      if (unlink($file['storage_file'])) {
+      //  print "deleted ". $file['storage_file'] ."\n\n";
+      }
+      else {
+        //print "could not delete: ". $file['storage_file'] . "\n\n";
+      }
+
+    }
+
+  }
+
+  return;
+*/
+}
+
+
+/**
+ * This updates the hierarchy of a configuration after it has been
+ * created to create the parent/child relationships
+ * @param object $configuration
+ */
+function mm_node_config_add($configuration) {
+  // get the parent id
+  $parent_cid = $configuration->harvest->configuration['mm_harvest_cid'];
+  // update the parent record to add this as a child of the parent
+  media_mover_api_hierarchy_update($parent_cid, 0, array($configuration->cid), TRUE);
+  // update this record to have the parent cid
+  media_mover_api_hierarchy_update($configuration->cid, $parent_cid);
+}
+
+
+/**
+ * this function lets users map incoming data to node values
+ * for advanced node data saving. User data is handled by
+ * _mm_node_save
+ *
+ * @param array $file
+ *   media mover file object
+ * @param array $configuration
+ *   media mover action configuration array
+ * @return object
+ *   a user object for saving
+ */
+function mm_node_map_user($file, $step) {
+  // check the override if we should use it
+  if ($file->data['user'] && ! $step->settings['node_save_override'] ) {
+    // loop through the user data and try to load a user
+    $keys = array('name', 'uid', 'mail');
+    foreach ($keys as $key) {
+      // check to see if we have this data
+      if ($file->data['user']->{$key}) {
+        // try to load a user
+        if ($account = user_load(array($key => $file->data['user']->{$key}))) {
+          break;
+        }
+      }
+    }
+  }
+  // fall back to node data to load the user
+  elseif ($file->data['node']->uid && ! $step->settings['node_save_override'] ) {
+    if ($account = user_load(array($key => $file->data['user']->{$key}))) {
+      break;
+    }
+  }
+
+  // make sure that we have an account to load
+  if (! $account) {
+    // Do we have an override user name or should returned user be anonymous?
+    if ($step->settings['node_save_name']) {
+      $array = array('name' => $step->settings['node_save_name']);
+    }
+    else {
+      $array = array('uid' => 0);
+    }
+    // load the account
+    $account = user_load($array);
+  }
+  return $account;
+}
+
+
+/* ********************************************** */
+/* Form functions                                 */
+/* ********************************************** */
+
+/**
+ * Handles the display of the MM files edit form. Shamelessly stollen from upload.module
+ * @TODO update the file data to match MM files
+ * @param array $form
+ */
+function mm_node_files_edit_form(&$form) {
+  $node = $form['#node'];
+  if ($node->media_mover) {
+    // Add the submit handler
+    $form['#submit'][] = 'mm_node_files_edit_form_submit';
+    $form['mm_node_files'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Media Mover files'),
+      '#collapsible' => true,
+      '#collapsed' => false,
+      '#theme' => 'mm_node_files_edit',
+      '#tree' => TRUE,
+      '#submit' => array('mm_node_files_edit_form_submit'),
+      '#description' => t('This list of files that have been created by Media Mover'),
+    );
+    foreach ($node->media_mover as $cid => $files) {
+      foreach ($files as $mmfid => $file) {
+        $description = "<small>". check_plain($file->filepath) ."</small>";
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['filepath'] = array('#type' => 'markup', '#value' => $file->filepath);
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['size'] = array('#value' => format_size($file->filesize));
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['remove'] = array('#type' => 'checkbox', '#default_value' => ! empty($file->remove));
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['reprocess'] = array('#type' => 'checkbox');
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['list'] = array(
+          '#type' => 'checkbox',
+          '#default_value' => $file->data['list'],
+        );
+        $form['mm_node_files']['mm_node_'. $file->mmfid]['status'] = array('#type' => 'markup',  '#value' => $file->status);
+      }
+    }
+  }
+}
+
+
+/**
+ * Submission of the node edit form media mover files
+ *
+ * @param array $form
+ * @param array $form_state
+ */
+function mm_node_files_edit_form_submit($form, $form_state) {
+  // We need to look through the form values for the mm_node_ prefix
+  foreach ($form_state['values']['mm_node_files'] as $key => $value) {
+
+    // find the mmfid from the key
+    if (preg_match("/mm_node_(.*)/", $key, $matches)) {
+
+      // Fetch the file that we will operate on
+      $file = media_mover_api_file_get($matches[1]);
+
+      // should we remove this file?
+      // @TODO not sure what to do here to find this data
+      if ($value['remove']) {
+        $file->delete();
+      }
+
+      // should we reprocess this file?
+      // @TODO not sure what to do here to find this data
+      elseif ($key['reprocess']) {
+        media_mover_api_file_process($file);
+      }
+
+      // should we list this file?
+      elseif ($key['list']) {
+        $file->data['list'] = TRUE;
+        $file->save();
+      }
+    }
+  }
+}
+
+
+/**
+ * Submit form data from the rerun form
+ *
+ * @param string $form_id
+ * @param array $form_values
+ */
+function media_mover_api_rerun_node_form_submit($form_id, $form_values) {
+  // first delete existing files for this node if we have them
+  $files = $form_state['values']['node']->media_mover[$form_state['values']['configuration']->cid];
+  if ($files) {
+    foreach ($files as $file) {
+      $file->delete();
+    }
+    // set a message that we did this
+    if (user_access('see media mover messages')) {
+      drupal_set_message(t('Deleted previously harvested files from: %title', array('%title' => $form_state['values']['node']->title)));
+    }
+    watchdog('Media Mover', 'Deleted media mover transcoded files from '. l($form_state['values']['node']->title, drupal_get_path_alias('node/'. $form_state['values']['node']->nid)));
+  }
+  // now rerun the config on this nid and set the output
+  drupal_set_message(media_mover_api_run_config($form_state['values']['configuration'], TRUE, $form_state['values']['node']->nid));
+  // clear the cache so the node is rebuilt
+  cache_clear_all('media_mover_files_node_'. $form_state['values']['node']->nid, 'cache_media_mover', TRUE);
+  return 'node/'. $form_state['values']['node']->nid;
+}
+
+
+/**
+ * Copy media mover data from an old node to a translated node
+ *
+ * @param $node
+ *   Object, Drupal node object
+ */
+function mm_node_translation($node) {
+  if ($node->translation_source) {
+    $translation_source = $node->translation_source;
+    if ($media_mover = $translation_source->media_mover) {
+      foreach ($media_mover as $cid) {
+        foreach ($cid as $file) {
+          $file['data']['nid'] = $node->nid;
+          db_query("INSERT INTO {media_mover_files} (nid, fid, cid, harvest_file, process_file, storage_file, complete_file, status, date, data)  VALUES (%d, %d, %d, '%s', '%s', '%s', '%s', %d, %d, '%s')",
+            $node->nid, $file['fid'], $file['cid'], $file['harvest_file'], $file['process_file'], $file['storage_file'], $file['complete_file'], $file['status'], $file['date'], serialize($file['data'])
+          );
+          watchdog('MM Node', 'Added Media Mover files to a translated node', array(), WATCHDOG_INFO);
+        }
+      }
+    }
+  }
+}

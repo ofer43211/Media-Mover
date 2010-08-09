@@ -1,0 +1,6 @@
+; $Id: mm_ftp.info,v 1.1.2.1 2010/02/13 18:34:02 arthuregg Exp $
+name = FTP Media Mover
+description = Adds FTP services for Media Mover
+package = "Media Mover"
+dependencies[] = media_mover_api
+core = 6.x

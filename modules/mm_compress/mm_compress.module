@@ -1,0 +1,139 @@
+<?php
+
+// $Id: mm_compress.module,v 1.1.2.4 2010/02/23 05:18:01 arthuregg Exp $
+
+/**
+ * Implements hook_media_mover().
+ *
+ * @return array
+ */
+function mm_compress_media_mover() {
+  $items = array();
+  $items['compression'] = array(
+    'description' => t('Compress files'),
+    'callback' => 'mm_compress_process',
+    'configuration' => 'mm_compress_config',
+  );
+  return $items;
+}
+
+
+/**
+ * Creates the configuration form
+ *
+ * @param $step
+ *   object, media mover step
+ * @return array
+ */
+function mm_compress_config($step) {
+  $form['mm_compress'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('File Compression'),
+    '#description' => t('This compresses files with the a compression utility.'),
+    '#collapsed' => FALSE,
+  );
+  $form['mm_compress']['compress_type'] = array(
+    '#type' => 'select',
+    '#title' => t('Chose the compression type'),
+    '#options' => mm_compress_types(),
+    '#default_value' => $step->settings['compress_type']
+  );
+  return $form;
+}
+
+
+/**
+ * Find compression software on the server
+ * @return array
+ *   array of binaries with their paths
+ */
+function mm_compress_types() {
+  $binaries = array();
+  $types = array('zip', 'tar');
+  foreach ($types as $type) {
+    if (exec('export PATH=$PATH:/sw/bin:/bin:/usr/bin; which '. $type)) {
+      $binaries[$type] = $type;
+      // tar has multiple options
+      if ($type == 'tar') {
+        $binaries['bz2'] = 'bz2';
+        $binaries['gz'] = 'gzip';
+      }
+    }
+  }
+  return $binaries;
+}
+
+
+/**
+ * Returns a path to the binary for this kind of compression
+ *
+ * @param $compression
+ *   string, name of the compression type
+ * @return string
+ */
+function mm_compress_type_binary($compression_type) {
+  // right now, the only items in the system are
+  // tar or zip based
+  if ($compression_type != 'zip') {
+    $compression_type = 'tar';
+  }
+  return exec('export PATH=$PATH:/sw/bin:/bin:/usr/bin; which '. $compression_type);
+}
+
+
+/**
+ * Generates the command options and file extensions
+ * for the requested action type
+ *
+ * @param $compression
+ *   string, name of compression
+ * @return array
+ */
+function mm_compress_type_args($compression_type) {
+  switch ($compression_type) {
+    case 'zip':
+      return array('options' => ' ', 'extension' => 'zip');
+    case 'tar' :
+      return array('options' => '-cf', 'extension' => 'tar');
+    case 'bz2':
+      return array('options' => '-cfj', 'extension' => 'bz2');
+    case 'gzip':
+      return array('options' => '-czf', 'extension' => 'tgz');
+  }
+}
+
+
+/**
+ * Runs the actual processing of the file
+ *
+ * @param $file
+ *   media mover file array
+ * @param $configuration
+ *   media mover configuration
+ * @return string
+ */
+function mm_compress_process($step, $file) {
+  // Get the binary to execute
+  $binary = mm_compress_type_binary($step->settings['compress_type']);
+  // get the options and the exception for the file
+  $options = mm_compress_type_args($step->settings['compress_type']);
+
+  // Create the output file in the media mover files directory
+
+
+  // create the output file path in the media mover files directory
+  // $output_file = file_create_filename(basename($filepath->filepath) .'.'. $step->settings['mm_antiword_output_type'], $output_dir);
+
+
+  // @TODO replace below with drupal function
+  $output_file = media_mover_api_dir_path($step->sid) . '/' . basename($file->filepath) . '.' . $options['extension'];
+
+  // build the command
+  $command = array($binary, $options['options'],  escapeshellarg($output_file), escapeshellarg($file->filepath));
+
+  // run the command
+  exec(implode(' ', $command));
+
+  // return the zip file
+  return $output_file;
+}

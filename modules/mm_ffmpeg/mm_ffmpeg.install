@@ -1,0 +1,10 @@
+<?php
+
+// $Id: mm_ffmpeg.install,v 1.1.2.2 2010/02/23 05:18:01 arthuregg Exp $
+
+
+
+/**
+ * @file
+ * The install file for mm_ffmpeg
+ */

@@ -1,0 +1,8 @@
+<?php
+
+// $Id: mm_dir.install,v 1.1.2.2 2010/02/23 05:18:01 arthuregg Exp $
+
+/**
+ * @file
+ * Installation for mm dir
+ */

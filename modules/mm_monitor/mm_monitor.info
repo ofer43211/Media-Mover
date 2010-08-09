@@ -1,0 +1,6 @@
+; $Id: mm_monitor.info,v 1.1.2.1 2010/03/24 04:05:14 arthuregg Exp $
+name = Media Mover Monitor
+description = Enables monitoring of Media Mover actions
+package = "Media Mover"
+dependencies[] = media_mover_api
+core = 6.x

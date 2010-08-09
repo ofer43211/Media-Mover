@@ -1,0 +1,35 @@
+<?php
+
+// $Id: mm_utilities.install,v 1.1.2.2 2010/05/10 19:05:26 arthuregg Exp $
+
+/**
+ * @file
+ * Installation for run control
+ */
+
+
+/**
+ * install the token table
+ */
+function mm_utilities_install() {
+  // Create tables.
+  drupal_install_schema('mm_utilities');
+}
+
+
+/**
+ * Implementation of hook_uninstall
+ * deletes all media mover tables
+ */
+function mm_utilities_uninstall() {
+  drupal_uninstall_schema('mm_utilities');
+}
+
+
+/**
+ * Implementation of hook_schema()
+ */
+function mm_utilities_schema() {
+  $schema = array();
+  return $schema;
+}

@@ -1,0 +1,6 @@
+; $Id: mm_dir.info,v 1.1.2.1 2009/10/17 02:32:20 arthuregg Exp $
+name = Media Mover Directory
+description = Harvest and store files to local directories
+package = "Media Mover"
+dependencies[] = media_mover_api 
+core = 6.x

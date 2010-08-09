@@ -1,0 +1,209 @@
+<?php
+
+// $Id: mm_dir.module,v 1.1.2.11 2010/07/18 21:20:31 msonnabaum Exp $
+
+
+/**
+ * @file
+ * Directory harvesting and storage for media mover files
+ */
+
+
+/**
+ * Implementation of hook_media_mover().
+ *
+ * @return array
+ */
+function mm_dir_media_mover() {
+  $items = array();
+  $items['mm_dir_harvest'] = array(
+    'description' => t('Harvest files from a local directory'),
+    'callback' => 'mm_dir_harvest',
+    'configuration' => 'mm_dir_config_harvest',
+    'harvest' => TRUE,
+  );
+  $items['mm_dir_store'] = array(
+    'description' => t('Store files to a local directory'),
+    'callback' => 'mm_dir_save',
+    'configuration' => 'mm_dir_config_storage',
+    'delete' => 'mm_dir_storage_delete',
+  );
+  return $items;
+}
+
+
+/**
+ * Builds the configuration form for the directory harvest
+ *
+ * @param $step
+ *   object, media mover configuration step
+ * @return array $form
+ */
+function mm_dir_config_harvest($step) {
+  $form['mm_dir_conf'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Directory harvest configuration'),
+    '#description' => t('This harvests files from a local directory.'),
+  );
+  $form['mm_dir_conf']['path'] = array(
+    '#title' => t('Directory path'),
+    '#type' => 'textfield',
+    '#default_value' => isset($step->settings['path']) ? $step->settings['path'] : '',
+    '#description' => t('Absolute path or relative path from Drupal\'s root (eg: sites/default/files) to the directory you wish to harvest from.  Note you may encounter open base dir issues wtih some PHP installations if your directory is not inside of your web root.'),
+  );
+  $form['mm_dir_conf']['file_types'] = array(
+    '#title' => t('File types'),
+    '#type' => 'textfield',
+    '#default_value' => isset($step->settings['file_types']) ? $step->settings['file_types'] : 'avi mov wmv mpeg mp4 mpeg2 dv 3gp 3g2 mpeg4',
+    '#description' => t('Space separated list of file types that can be harvested. These are file extensions and are values like "avi mov wmv mpeg mp4 mpeg2 dv".'),
+  );
+  return $form;
+}
+
+
+/**
+ * Validates the path
+ *
+ * @param array $configuration
+ * @return array
+ */
+function mm_dir_config_harvest_validate($configuration) {
+  // is the path valid?
+  if (! file_check_directory($configuration['path'], FILE_CREATE_DIRECTORY) ) {
+    $errors[] = array(
+      'element' => 'path',
+      'message' => t('Sorry, the path you have chosen does not exist or is not writable.')
+  );
+  }
+  return $errors;
+}
+
+
+/**
+ * Creates the configuration form for the storage option.
+ *
+ * @param $step
+ *   object, media mover configuration object
+ * @return array $form
+ */
+function mm_dir_config_storage($step) {
+  $form['mm_dir_conf'] = array(
+    '#type' => 'fieldset',
+    '#title' => t('Directory storage configuration'),
+    '#description' => t('This stores files in a local directory.'),
+    '#collapsed' => FALSE,
+  );
+  $form['mm_dir_conf']['path'] = array(
+    '#title' => t('Directory path'),
+    '#type' => 'textfield',
+    '#default_value' => isset($step->settings['path']) ? $step->settings['path'] : '',
+    '#description' => t('Absolute path to the directory you wish to store in. Note you may encounter open base dir issues wtih some PHP installations if your directory is not inside of your web root.'),
+  );
+  return $form;
+}
+
+
+/**
+ * Validates the path and makes sure that directory is writeable
+ *
+ * @param array $configuration
+ * @return array
+ */
+function mm_dir_config_storage_validate($configuration) {
+  // is destination valid?
+  if (! file_check_directory($configuration['path'], FILE_CREATE_DIRECTORY) ) {
+    $errors[] = array(
+      'element' => 'path',
+      'message' => t('Sorry, either the target directory can not be created or the webserver does not have sufficient permissions to create it.'),
+    );
+  }
+  return $errors;
+}
+
+
+/**
+ * This does the actual harvesting of the files from a directory
+ *
+ * @param array $configuration
+ * @return array
+ */
+function mm_dir_harvest($step) {
+  // Check to see if the directory exists
+  if (! is_dir($step->settings['path'])) {
+    watchdog('mm_dir', 'Directory %dir does not exist', array('%dir', $step->settings['path']), WATCHDOG_ERROR);
+    return FALSE;
+  }
+
+  // Should we select all files?
+  if (! $step->settings['file_types']) {
+    $pattern = "\.*";
+  }
+  else {
+    // build the file types to harvest
+    $search = array(' ', ',');
+    $replace = array('|', '|');
+    $filetypes = str_replace($search, $replace, $step->settings['file_types']);
+
+    // make sure that we have both lower and upper case versions of the file
+    // extensions. file_scan_directory uses ereg() for the mask which
+    // means we have to pass both upper and lower case version
+    $filetypes = drupal_strtoupper($filetypes) . '|' . drupal_strtolower($filetypes);
+
+    // now add the regex to the pattern
+    $pattern = ".*($filetypes)$";
+  }
+
+  // get files restricted by file extension
+  $files = file_scan_directory($step->settings['path'], $pattern);
+
+  // check the returned files
+  if ($files) {
+    foreach ($files as $filepath => $file) {
+      // now we need to see if we have this file in the database. Note that in
+      // this instance, we are not checking dates on files vs. the database
+      $result = db_result(db_query("SELECT mmfid FROM {media_mover_files} WHERE cid = '%s' AND filepath_in = '%s'", $step->cid, $filepath));
+      if (! $result) {
+        // We just need to return a filepath as the file is local to
+        // the same file system as Drupal.
+        $return[] = array('filepath' => $filepath);
+      }
+    }
+    // if we have files, return them
+    if (count($return)) {
+      return $return;
+    }
+  }
+}
+
+
+/**
+ * this saves a harvested file to a directory location specified
+ * in the configuration
+ *
+ * @param array $file
+ * @param array $configuration
+ * @param int $action
+ * @return string
+ */
+function mm_dir_save($step, $file) {
+  // make sure destination directory exists
+  if (! file_check_directory($step->settings['path'], FILE_CREATE_DIRECTORY)) {
+    return FALSE;
+  }
+  // assign the new path to the file name
+  $new_file = file_create_filename(basename($file->filepath), $step->settings['path']);
+  // now copy this file from the old to the new location
+  copy($file->filepath, $new_file);
+  media_mover_api_set_file_perm($new_file);
+  // return the file
+  return $new_file;
+}
+
+
+/**
+ * delete a file when the media mover delete hook is called
+ * @TODO complete this functionality
+ */
+function mm_dir_storage_delete($file, $configuration) {
+
+}

@@ -1,0 +1,16 @@
+/* $Id: media_mover_ui.css,v 1.1.2.3 2010/01/15 01:30:05 arthuregg Exp $ */
+
+/* Media Mover UI module CSS */
+
+tr.mmapi-parent {
+  border-top: 2px solid #777777 !important;
+}
+
+/* ----------------------------------------------------- */
+/* Media Mover configuration screens */
+
+/* move the select to the left */
+#media-mover-ui-add-config-form #edit-configure,
+#media-mover-ui-add-config-form #edit-save {
+  margin: 31px 0px 10px 10px;
+}
