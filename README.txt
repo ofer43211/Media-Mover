@@ -62,21 +62,3 @@ admin/media_mover
  DEVELOPERS
 -----------------------------------------------------------------------
  please see http://drupal.org/node/566870
-
-This is a new line
-
-Testing ticket integration
-One more go
-And another
-And yet another
-testing again
-more
-Testing again
-aklsdjf
-sdfahslkjlkajskdlfj
-aljsfljaslkjdf
-kljwiorlmmdflkasdf
-Checking ticket name again
-MOOOOOO
-Moo?
-moo moo

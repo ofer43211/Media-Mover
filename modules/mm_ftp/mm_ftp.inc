@@ -137,7 +137,7 @@ function mmm_ftp_get_file($ftp_connection, $step, $harvest_file) {
   $item['filemime'] = $mime;
   $item['filesize'] = filesize($local_file_path);
   $item['filename'] = basename($local_file_path);
-  $item['filepath_in'] =  $local_file_path;
+  $item['source_filepath'] =  $local_file_path;
   $item['filepath'] = $local_file_path;
   $item['node']->title = $local_file;
   return $item;

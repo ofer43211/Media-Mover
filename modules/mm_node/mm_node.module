@@ -801,16 +801,18 @@ function mm_node_files_edit_form_submit($form, $form_state) {
       // Fetch the file that we will operate on
       $file = media_mover_api_file_get($matches[1]);
 
-      // should we remove this file?
-      // @TODO not sure what to do here to find this data
+      // Should we remove this file?
       if ($value['remove']) {
         $file->delete();
       }
 
-      // should we reprocess this file?
-      // @TODO not sure what to do here to find this data
+      // Should we reprocess this file?
+      // @NOTE not sure what to do with any files that were associated with tis file
       elseif ($key['reprocess']) {
+        // Set the file status
         media_mover_api_file_process($file);
+        $configuration = media_mover_api_configuration_get($file->cid);
+        $configuration->run_file($file);
       }
 
       // should we list this file?

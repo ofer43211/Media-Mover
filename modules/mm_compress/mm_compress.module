@@ -1,6 +1,6 @@
 <?php
 
-// $Id: mm_compress.module,v 1.1.2.4 2010/02/23 05:18:01 arthuregg Exp $
+// $Id: mm_compress.module,v 1.1.2.5 2010/09/03 16:36:13 arthuregg Exp $
 
 /**
  * Implements hook_media_mover().
@@ -117,23 +117,13 @@ function mm_compress_process($step, $file) {
   $binary = mm_compress_type_binary($step->settings['compress_type']);
   // get the options and the exception for the file
   $options = mm_compress_type_args($step->settings['compress_type']);
-
   // Create the output file in the media mover files directory
-
-
-  // create the output file path in the media mover files directory
-  // $output_file = file_create_filename(basename($filepath->filepath) .'.'. $step->settings['mm_antiword_output_type'], $output_dir);
-
-
   // @TODO replace below with drupal function
   $output_file = media_mover_api_dir_path($step->sid) . '/' . basename($file->filepath) . '.' . $options['extension'];
-
   // build the command
   $command = array($binary, $options['options'],  escapeshellarg($output_file), escapeshellarg($file->filepath));
-
   // run the command
   exec(implode(' ', $command));
-
   // return the zip file
   return $output_file;
 }

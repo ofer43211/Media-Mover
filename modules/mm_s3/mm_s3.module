@@ -351,6 +351,8 @@ function mm_s3_config($step) {
       however you can define your own S3 URL with your DNS service.'
     ),
   );
+  // Make sure this is functional
+  $form['validate'][] = 'mm_s3_validate_action_settings';
 
   return $form;
 }

@@ -1,6 +1,6 @@
 <?php
 
-// $Id: mm_ffmpeg.module,v 1.1.2.12 2010/07/25 14:25:59 arthuregg Exp $
+// $Id: mm_ffmpeg.module,v 1.1.2.13 2010/08/22 19:41:33 arthuregg Exp $
 
 
 /**
@@ -196,7 +196,8 @@ function mm_ffmpeg_thumbnails_config($step) {
  */
 function mm_ffmpeg_video_thumbnail($step, $file) {
   $output_file  = file_create_filename(
-    str_replace(' ', '_', basename($file->filepath)) .'.thumb'. $file->cid .'.'. $step->settings['thumb_format'],
+    // We only output jpeg files
+    str_replace(' ', '_', basename($file->filepath)) .'.thumb'. $file->cid .'.jpg',
     media_mover_api_dir_path('ffmpeg/thumbnails/'. $file->cid)
   );
 

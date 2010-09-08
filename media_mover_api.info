@@ -1,6 +1,7 @@
-; $Id: media_mover_api.info,v 1.1.2.1.2.2.2.2 2009/12/03 03:22:28 arthuregg Exp $
+; $Id: media_mover_api.info,v 1.1.2.1.2.2.2.3 2010/08/24 21:06:19 arthuregg Exp $
 name = " Media Mover API"
 description = Core of the Media Mover system
 package = "Media Mover"
+dependency[] = drupal_queue
 core = 6.x
 php = 5.0

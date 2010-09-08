@@ -1,6 +1,6 @@
 <?php
 
-// $Id: media_mover_ui.module,v 1.1.2.54 2010/07/25 15:55:55 arthuregg Exp $
+// $Id: media_mover_ui.module,v 1.1.2.60 2010/09/03 16:36:13 arthuregg Exp $
 
 /**
  * @file
@@ -208,7 +208,7 @@ function media_mover_ui_menu() {
     'type' => MENU_LOCAL_TASK,
   );
 
-  // run tab for a configuration
+  // Run tab for a configuration
   $items['admin/build/media_mover/configuration/%/run'] = array(
     'title' => 'Run',
     'page callback' => 'media_mover_ui_configuration_run',
@@ -217,7 +217,7 @@ function media_mover_ui_menu() {
     'type' => MENU_LOCAL_TASK,
   );
 
-  // file tab for a configuration
+  // File tab for a configuration
   $items['admin/build/media_mover/configuration/%/files'] = array(
     'title' => 'Files',
     'page callback' => 'media_mover_ui_files_list',
@@ -235,7 +235,7 @@ function media_mover_ui_menu() {
     'page arguments' => array(4),
   );
 
-  // change the status of a media mover configuration
+  // Change the status of a media mover configuration
   $items['admin/build/media_mover/configuration/%/status'] = array(
     'title' => 'Confirm Configuration Status Change',
     'page callback' => 'media_mover_ui_configuration_status_change',
@@ -279,7 +279,7 @@ function media_mover_ui_menu() {
   // -------------------------------------------------------
   // File tasks
 
-  // files status
+  // Files status
   $items['admin/build/media_mover/files/status'] = array(
     'title' => 'File Status',
     'page callback' => 'media_mover_ui_files_status',
@@ -287,7 +287,7 @@ function media_mover_ui_menu() {
     'type' => MENU_CALLBACK,
   );
 
-  // edit a file
+  // Edit a file
   $items['admin/build/media_mover/file/edit'] = array(
     'title' => 'Edit File',
     'page callback' => 'drupal_get_form',
@@ -368,8 +368,8 @@ function media_mover_ui_menu_configuration_title_callback($cid) {
 /* ****************************************** */
 
 /**
- * display information about media_mover modules
- * and existing configurations
+ * Display information about media_mover modules and existing configurations
+ *
  * @return string html
  */
 function media_mover_ui_landing_page() {
@@ -537,6 +537,8 @@ function media_mover_ui_config_add_form($form_state, $configuration = NULL) {
   // Set the title
   drupal_set_title(t('Add a new configuration'));
 
+  dpm($form_state);
+
   // Build the base configuration form
   $form['configuration'] = array(
     '#type' => 'fieldset',
@@ -570,6 +572,13 @@ function media_mover_ui_config_add_form($form_state, $configuration = NULL) {
     '#description' => t('Enter a description for your configuration.'),
     '#default_value' => isset($form_state['values']['configuration']['description']) ? $form_state['values']['configuration']['description'] : '',
     '#rows' => 2,
+  );
+
+  $form['configuration']['enabled'] = array(
+    '#type' => 'checkbox',
+    '#title' => t('Configuration is enabled'),
+    '#description' => t('Configuration will run when requested by cron or other means.'),
+    '#default_value' => TRUE,
   );
 
   $form['steps'] = array(
@@ -655,8 +664,6 @@ function media_mover_ui_config_add_form_validate($form, &$form_state) {
 /**
  * This is called by the configuration form to add a specific action
  *
- * @TODO is this needed?
- *
  * @param $form
  * @param $form_state
  */
@@ -684,7 +691,7 @@ function media_mover_ui_config_add_form_submit($form, &$form_state) {
       $step->{$key} = $value;
     }
     // Get the action data for this step
-    $action_data = media_mover_ui_form_step_action($form_state['values']['steps'][$step_order]['meta']['action_choice']);
+    $action_data = media_mover_api_module_action_data($form_state['values']['steps'][$step_order]['meta']['action_choice']);
     foreach ($action_data as $key => $value) {
       $step->{$key} = $value;
     }
@@ -700,6 +707,15 @@ function media_mover_ui_config_add_form_submit($form, &$form_state) {
     }
     $configuration->steps[$step_order] = $step;
   }
+
+  // Set configuration status based on enabled/not enabled
+  if ($configuration->enabled) {
+    $configuration->status = MMA_CONFIG_STATUS_ENABLED;
+  }
+  else{
+    $configuration->status = MMA_CONFIG_STATUS_DISABLED;
+  }
+
   // Save the configuration
   $configuration->save();
 
@@ -726,7 +742,9 @@ function media_mover_ui_config_add_steps_form(&$form, $form_state) {
         else {
           $settings = array();
         }
-        $form['steps'][$step_order] = media_mover_ui_config_add_step_form($step['meta']['action_choice'], $step_order, FALSE, $settings);
+        // Get the data for this step
+        $action_data = media_mover_api_action_get($step['meta']['action_choice']);
+        $form['steps'][$step_order] = media_mover_ui_config_add_step_form($action_data, $step_order, FALSE, $settings);
       }
     }
     // If there is a new action requested, display it
@@ -738,7 +756,8 @@ function media_mover_ui_config_add_steps_form(&$form, $form_state) {
       else {
         $step_order++;
       }
-      $form['steps'][$step_order] = media_mover_ui_config_add_step_form($form_state['values']['action_choice'], $step_order);
+      $action_data = media_mover_api_action_get($form_state['values']['action_choice']);
+      $form['steps'][$step_order] = media_mover_ui_config_add_step_form($action_data, $step_order);
     }
   }
 }
@@ -747,8 +766,8 @@ function media_mover_ui_config_add_steps_form(&$form, $form_state) {
 /**
  * Configuration form for an individual step
  *
- * @param $action_choice
- *   String, action to fetch
+ * @param $action_data
+ *   Array, all of the defined action data from the module
  * @param $step_order
  *   Integer, current step
  * @param $display
@@ -757,10 +776,7 @@ function media_mover_ui_config_add_steps_form(&$form, $form_state) {
  *   Boolean, should this fieldset be open?
  * @return $form
  */
-function media_mover_ui_config_add_step_form($action_choice, $step_order, $display = TRUE, $settings = FALSE) {
-  // Collect the data for this action choice
-  $action_data = media_mover_ui_form_step_action($action_choice);
-
+function media_mover_ui_config_add_step_form($action_data, $step_order, $display = TRUE, $settings = FALSE) {
   // Fieldset for the settings for this action. We have to figure out
   // if this fieldset should be displayed. We display it if it is the last action.
   $form = array(
@@ -897,14 +913,14 @@ function media_mover_ui_config_edit_form($form_state, $cid) {
   // can not be edited
   // @TODO need to figure this out
   if ($configuration->settings['default']) {
-    drupal_set_message(t('This configuration is a default configuration that is defined by a module. You can not edit it. If you wish to make modifications to it, clone the configuration and you will be able to edit the clone.'));
-    drupal_goto('admin/build/media_mover/configuration/'. $cid);
+    // drupal_set_message(t('This configuration is a default configuration that is defined by a module. You can not edit it. If you wish to make modifications to it, clone the configuration and you will be able to edit the clone.'));
+    //drupal_goto('admin/build/media_mover/configuration/' . $cid . '/view);
   }
 
   // Check if this configuration is currently running, if it is, return user to config screen
   if ($configuration->status == MMA_CONFIG_STATUS_RUNNING) {
     drupal_set_message(t('This configuration is currently running. You need to wait to modify it until it is complete.'), 'error');
-    drupal_goto('admin/build/media_mover/configuration/'. $cid);
+    drupal_goto('admin/build/media_mover/configuration/' . $cid);
   }
 
   // default form elements
@@ -933,7 +949,6 @@ function media_mover_ui_config_edit_form($form_state, $cid) {
     '#title' => t('Configuration is enabled'),
     '#description' => t('Configuration will run when requested by cron or other means.'),
     '#default_value' => $configuration->status === MMA_CONFIG_STATUS_ENABLED ? TRUE : FALSE,
-    '#required' => TRUE,
   );
   $form['configuration']['cid'] = array(
     '#type' => 'value',
@@ -943,70 +958,20 @@ function media_mover_ui_config_edit_form($form_state, $cid) {
   $form['steps'] = array(
     '#tree' => TRUE
   );
+
   // Build the steps form
   foreach ($configuration->steps as $step) {
-    // Fieldset for the settings for this action. We have to figure out
-    // if this fieldset should be displayed. We display it if it is the last action.
-    $form['steps'][$step->step_order] = array(
-      '#type' => 'fieldset',
-      '#title' => t('Step !step: !name', array('!step' => $step->step_order + 1, '!name' => $step->name)),
-      '#collapsible' => TRUE,
-    );
+    $config_function = $step->configuration;
+    // Get all step configuration forms
+    $form['steps'][$step->step_order] = media_mover_ui_config_add_step_form((array) $step, $step->step_order, TRUE, $step->settings);
+  }
 
-    $form['steps'][$step->step_order]['meta'] = array(
-      '#type' => 'fieldset',
-      '#title' => t('Step name'),
-      '#description' => t('Provide a unique name and machine name for the step. This is done automatically unless you want to specify it.'),
-      '#collapsed' => TRUE,
-      '#collapsible' => TRUE,
-    );
-    $form['steps'][$step->step_order]['meta']['name'] = array(
-      '#type' => 'textfield',
-      '#title' => t('Step description'),
-      '#default_value' => $step->name,
-      '#description' => t('Describe this step in your configuration. You can also set the !machine_name.',
-        array('!machine_name' => l(t('machine name'), '/', array('attributes' => array('class' => 'machine_name_link'))))
-      ),
-      '#attributes' => array('class' => 'step_name', 'step_id' => $step->step_order ),
-      '#required' => TRUE,
-    );
-
-    // This is hidden by default
-    $form['steps'][$step->step_order]['meta']['sid'] = array(
-      '#type' => 'textfield',
-      '#title' => t('Step machine name'),
-       // @TODO note that the machine name uniqueness checking does not work if
-       //       if the same step is used twice in the configuration
-      '#default_value' => $step->sid,
-      '#description' =>  t('The unique identifier for this step.'),
-      '#attributes' => array('class' => 'step_machine_name', 'step_id' => $step->step_order),
-      '#prefix' => '<div class="machine_name_wrapper">',
-      '#suffix' => '</div>',
-      '#required' => TRUE,
-    );
-
-    // Get the config function name
-    $function = $step->configuration;
-    if (function_exists($function)) {
-      // Get the action's form
-       $form['steps'][$step->step_order]['settings'] = $function($step);
-    }
-    else {
-      $form['steps'][$step->step_order]['settings']['default_'. $step->step_order] = array(
-        '#type' => 'markup',
-        '#weight' => -1,
-        '#value' => '<div>'. t('There are no settings for this action') .'</div>',
-      );
-    }
-    $form['steps'][$step->step_order]['remove'] = array(
-      '#type' => 'submit',
-      '#value' => t('Remove step !step', array('!step' => $step->step_order + 1)),
-      '#submit' => array('media_mover_ui_config_edit_remove_step'),
-      '#attributes' => array(
-        'onclick' => 'javascript: confirm("' . t('Removing this step will delete files created by this specific step. Procede with caution.') .'");'
-      ),
-      '#params' => array('step_order' => $step->step_order)
-    );
+  // Did the user add a new step?
+  if ($form_state['values']['action_choice']) {
+    $action_data = media_mover_api_module_action_data($form_state['values']['action_choice']);
+    // The step order for this step is the last one + 1
+    $step_order = $step->step_order + 1;
+    $form['steps'][$step_order] = media_mover_ui_config_add_step_form($action_data, $step_order);
   }
 
   // Wrap the action selector in a specificly themed display
@@ -1065,7 +1030,12 @@ function media_mover_ui_config_edit_form_submit($form, &$form_state) {
   }
 
   // Extract any changed step data
-  foreach($form_state['values']['steps'] as $step_id => $values) {
+  foreach ($form_state['values']['steps'] as $step_id => $values) {
+    // It could be the case that this is a new step. Make sure that it is a step object
+    if (! isset($configuration->steps[$step_id])) {
+      $configuration->steps[$step_id] = new media_mover_step();
+    }
+
     // Step meta data is stored as an array, extract it into the step
     foreach ($form_state['values']['steps'][$step_id]['meta'] as $key => $value) {
       $configuration->steps[$step_id]->{$key} = $value;
@@ -1076,26 +1046,29 @@ function media_mover_ui_config_edit_form_submit($form, &$form_state) {
         $configuration->steps[$step_id]->settings[$key] = $value;
       }
     }
+
+  }
+
+  // Set configuration status based on enabled/not enabled
+  if ($configuration->enabled) {
+    $configuration->status = MMA_CONFIG_STATUS_ENABLED;
+  }
+  else {
+    $configuration->status = MMA_CONFIG_STATUS_DISABLED;
   }
 
   // Update the configuration
   $configuration->save();
 
-  // @TODO check for added/deleted steps
-  if ($form_state['storage']['added_steps']) {
-
-  }
+  // If there were deleted steps, we need to delete the files as well
   if ($steps = $form_state['storage']['removed_steps']) {
     foreach ($steps as $step) {
-      // Delete files from this step
-
-      // Check for any files that are in this step and advance them
-      // if any of these files are locked, what to do? Queue these deletions
-      $files = $configuration->get_files($step->step_order);
-
-      // Delete files
-
-
+      // Get the files that will be deleted
+      $files = $configuration->get_files(NULL, $step->step_order);
+      // Queue these files for deletion
+      $configuration->delete_files($files);
+      // Delete this step
+      $step->delete();
     }
   }
 
@@ -1213,8 +1186,8 @@ function media_mover_ui_config_empty_confirm($form_state, $cid) {
 
 
 /**
- * deletes a configuration submission
- * this only deletes the records of files
+ * Deletes a configuration submission this only deletes the records of files
+ *
  * @param string $form_id
  * @param array $form_state
  */
@@ -1231,7 +1204,8 @@ function media_mover_ui_config_empty_confirm_submit($form, &$form_state) {
 
 
 /**
- * deletes a configuration confirm form
+ * Delete a configuration confirm form
+ *
  * @param array $drupal_form
  *   drupal form - this is a place holder because of
  * @param int $cid
@@ -1241,14 +1215,7 @@ function media_mover_ui_config_empty_confirm_submit($form, &$form_state) {
  */
 function media_mover_ui_config_delete_confirm($drupal_form, $cid) {
   $configuration = media_mover_api_configuration_get($cid);
-
-  // we need to see if this is a parent configuration
-  if (count($configuration->hierarchy->children)) {
-    drupal_set_message(t('This configuration has child configurations. You can not delete this until you delete the child configurations'));
-    drupal_goto('admin/build/media_mover/configuration/'. $cid .'/view');
-  }
-
-  $output .= t('You are about to delete:<br /> %config_name <br /> %config_description <br />', array('%config_name' => $config->name, '%config_description' => $config->description) );
+  $output .= t('You are about to delete:<br /> %config_name <br /> %config_description <br />', array('%config_name' => $configuration->name, '%config_description' => $configuration->description) );
   $output .= t('This will also delete references to files, and the files that Media Mover has created with this configuration.');
   $form['markup'] = array(
     '#type' => 'markup',
@@ -1277,11 +1244,7 @@ function media_mover_ui_config_delete_confirm($drupal_form, $cid) {
 function media_mover_ui_config_delete_confirm_submit($form_id, &$form_state) {
   // load up the configuration so we can easily acess some of its data
   $configuration = media_mover_api_configuration_get($form_state['values']['cid']);
-  // run the hook to delete files created by any MM module
-  media_mover_api_config_delete_files($configuration->cid);
-  // Should we delete files?
   $configuration->delete();
-
   drupal_set_message('Deleted the configuration.');
   $form_state['redirect'] = 'admin/build/media_mover';
 }
@@ -1303,8 +1266,8 @@ function media_mover_ui_configuration_form_select_builder($type) {
   $return[0] = t('Please choose an option');
   // loop through the actions to build a nice array of options
   if ($actions = media_mover_api_actions_get($type)) {
-    foreach ($actions as $action) {
-      $return[$action['module'] . "--" . $action['action_id']] = $action['description'];
+    foreach ($actions as $id => $action) {
+      $return[$id] = $action['description'];
     }
   }
   return $return;
@@ -1339,6 +1302,7 @@ function media_mover_ui_steps_select_get($type = NULL) {
 function media_mover_ui_configuration_view($cid) {
   // load the configuration
   $configuration = media_mover_api_configuration_get($cid);
+  dpm($configuration);
   drupal_set_title($configuration->name);
   // Create the list of actions you can take with this configuration
   $links = array(
@@ -1375,21 +1339,7 @@ function media_mover_ui_configuration_view($cid) {
     $description[] = t('!count files are currently being processed by this configuration', array('!count' => $process_count));
   }
 
-  return $description;
-}
-
-
-/**
- * Utility function to get action data for the action_choice
- *
- * @param array $step_action_choice
- */
-function media_mover_ui_form_step_action($step_action_choice) {
-  // Get the parameters for the new step being added
-  list ($module, $action) = explode(MMA_FORM_DELIMETER, $step_action_choice);
-  if ($action_data = media_mover_api_actions_get(null, $module, $action)) {
-    return $action_data;
-  }
+  return implode('<br />', $description);
 }
 
 
@@ -1530,11 +1480,11 @@ function media_mover_ui_files_list($cid = FALSE) {
   }
   $rows = array();
   while ($result = db_fetch_array($results)) {
-    $mmfile = media_mover_api_file_get($result['mmfid']);
+    $mmfile = media_mover_api_file_get($result['mmfid'], FALSE);
     $rows[] = array(
-      l($mmfile->mmfid, 'admin/content/media_mover/files/' . $mmfile->mmfid),
+      l($mmfile->mmfid, 'admin/build/media_mover/file/edit/' . $mmfile->mmfid),
       $mmfile->nid ? l($mmfile->nid, 'node/' . $mmfile->nid) : t('NA'),
-      $mmfile->filepath_in,
+      $mmfile->source_filepath,
       $mmfile->filepath,
       $mmfile->status,
       format_date($mmfile->date),
@@ -1545,6 +1495,153 @@ function media_mover_ui_files_list($cid = FALSE) {
   return theme('table', $header, $rows) . theme('pager');
 }
 
+
+
+/**
+ * Edit a single file form
+ *
+ * @param int $mmfid is a media mover file id
+ * @return array drupal form array
+ */
+function media_mover_ui_edit_file_form($form_state, $mmfid) {
+  // set the title
+  drupal_set_title(t('Media Mover File %id', array('%id' => $mmfid)));
+  // Load the item without the cache
+  $file = media_mover_api_file_get($mmfid, FALSE);
+  // if the file isn't finished set an alert
+  if ($file->status != MMA_FILE_STATUS_FINISHED) {
+    drupal_set_message(t('This item has not been finished by Media Mover. It is currently in status: !status',
+      array('!status' => media_mover_api_file_status($file->status))),
+      'error'
+    );
+  }
+
+  $form = array();
+  // set the mmfid
+  $form['mmfid'] = array(
+    '#type' => 'hidden',
+    '#value' => $file->mmfid
+  );
+
+  // Get the configuration
+  $configuration = media_mover_api_configuration_get($file->cid);
+
+  // Get each of the actions for this configuration
+  foreach ($file->steps as $id => $step) {
+    $rows[] = array(
+      t('Step: %name', array('%name' => $step->name)),
+      t('File: !file', array('!file' => l($file->data['files'][$id], $file->data['files'][$id])))
+    );
+  }
+  // build the header
+  $header = array(array('data' => t('Configuration: %name', array('%name' => $configuration->name)), 'colspan' => 2));
+  $form['title'] = array(
+    '#type' => 'markup',
+    '#value' => theme('table', $header, $rows)
+  );
+
+  $form['additonal'] = array(
+    '#type' => 'markup',
+    '#value' => 'Additional file data: <p><pre>'. print_r($file->data, TRUE) .'</pre>',
+  );
+
+  $form['file']['nid'] = array(
+    '#title' => "Node ID",
+    '#type' => 'textfield',
+    '#default_value' => $file->nid,
+    '#description' => t('File is associated with this Node ID. You can assocate a Media Mover file with one NID'),
+  );
+
+  $options = media_mover_api_file_status();
+  $form['file']['status'] = array(
+    '#title' => t('Current File Status'),
+    '#type' => 'select',
+    '#options' => $options,
+    '#default_value' => $file->status,
+    '#description' => t('Sets the status that the file is in. Should be <em>Finished<em> unless the file is stuck or actively being processed.'),
+  );
+
+  $form['submit'] = array(
+    '#type' => 'submit',
+    '#value' => t('Save'),
+  );
+
+  $form['delete'] = array(
+    '#type' => 'submit',
+    '#value' => t('Delete'),
+    '#submit' => array('media_mover_ui_edit_file_form_delete_submit'),
+  );
+  return $form;
+}
+
+
+/**
+ * implementation of hook form_submit
+ * nid, url, status, fid are incoming vars
+ * @param array $form
+ * @param array $form_state
+ *
+ */
+function media_mover_uii_edit_file_form_submit($form, &$form_state) {
+  $file = media_mover_get_file($form_state['values']['mmfid']);
+  $file->nid = $form_state['values']['nid'];
+  $file->status = $form_state['values']['status'];
+  $file->save();
+  drupal_set_message(t('Media mover file ID: !id was updated.', array('!id' => $form_state['values']['mmfid'])));
+  $form_state['redirect'] = 'admin/build/media_mover/files';
+}
+
+
+/**
+ * Helper function to redirect the admin to the file
+ * delete confirmation page
+ *
+ * @param $form
+ * @param $form_state
+ */
+function media_mover_ui_edit_file_form_delete_submit($form, &$form_state) {
+  // redirect to the delete confirm
+  $form_state['redirect'] = 'admin/build/media_mover/file/delete/'. $form_state['values']['mmfid'];
+}
+
+
+/**
+ * returns delete_file_form
+ * @param int $mmfid is a media mover field id
+ * @return array drupal confirm
+ */
+function media_mover_ui_file_delete_confirm_form($form_state, $mmfid) {
+  $form['display_data'] = array(
+    '#type' => 'markup',
+    '#value' => t('You are about to delete file id#: %fid', array('%fid' => $mmfid)),
+  );
+  $form['mmfid'] = array(
+    '#type' => 'hidden',
+    '#value' => $mmfid,
+    );
+  return confirm_form($form,
+      t('Are you sure you want to delete this file?'),
+      'admin/build/media_mover/files',
+      t('This action cannot be undone.'),
+      t('Delete'),
+      t('Cancel')
+  );
+}
+
+
+/**
+ * Deletes single file
+ * @param string $form_id
+ * @param array $form_values is drupal form array
+ * @
+ */
+function media_mover_ui_file_delete_confirm_form_submit($form, &$form_state) {
+  // get the file
+  $file = media_mover_api_file_get($form['mmfid']['#value']);
+  $file->delete();
+  drupal_set_message(t('Deleted the file.'));
+  $form_state['redirect'] = 'admin/build/media_mover/files';
+}
 
 /* *********************************** */
 

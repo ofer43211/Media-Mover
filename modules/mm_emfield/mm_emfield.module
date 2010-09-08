@@ -254,7 +254,7 @@ function mm_emfield_node_save($step, &$file) {
 
   // If the admin requested that source material be deleted, delete it now. DANGER CAKES!
   // Note that we only do this if the current file path is NOT the source material.
-  if ($step->settings['mm_emfield_file_source_delete'] && $file->filepath != $file->filepath_in) {
+  if ($step->settings['mm_emfield_file_source_delete'] && $file->filepath != $file->source_filepath) {
     file_delete($file->filepath);
     watchdog('MM Emfield', 'Deleted source material %file', array(
       '%file' => $file->filepath,

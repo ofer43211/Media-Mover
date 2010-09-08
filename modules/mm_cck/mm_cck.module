@@ -1,6 +1,6 @@
 <?php
 
-// $Id: mm_cck.module,v 1.1.2.10 2010/07/18 21:20:31 msonnabaum Exp $
+// $Id: mm_cck.module,v 1.1.2.14 2010/08/04 16:29:02 arthuregg Exp $
 
 /**
  * @file
@@ -141,11 +141,11 @@ function mm_cck_harvest($step) {
         $results = db_query('SELECT f.filepath AS filepath, n.nid, f.fid FROM {files} f
           LEFT JOIN {'. $db_info['table'] .'} c ON c.'. $db_info['columns']['fid']['column'] .' = f.fid
           LEFT JOIN {node} n ON c.nid = n.nid
-          LEFT JOIN {media_mover_files} m ON m.fid = f.fid AND m.cid = %d
+          LEFT JOIN {media_mover_files} m ON m.fid = f.fid AND m.cid = "%s"
           WHERE  (n.nid IS NOT NULL AND m.nid IS NULL) OR
-            (n.nid IS NOT NULL AND n.nid = m.nid AND f.filepath <> m.filepath_in)
+            (n.nid IS NOT NULL AND n.nid = m.nid AND f.filepath <> m.source_filepath)
             '. $file_type_conditions .'
-            AND f.filepath NOT IN (select filepath_in from {media_mover_files} where cid =%d)
+            AND f.filepath NOT IN (select source_filepath from {media_mover_files} where cid ="%s")
           ORDER BY f.timestamp',
           $step->cid, $configuration['mm_cck_havest_node_type'], $step->cid);
 
@@ -162,16 +162,14 @@ function mm_cck_harvest($step) {
 
 /**
  * Save to the CCK field
- * @param int $action
- *   action id that is being run
- * @param array $configuration
- *   the configuration array
+ * @param array $step
+ *   Object, media mover step
  * @param array $file
  *   media mover file array
  * @return string
  *   new file location
  */
-function mm_cck_node_save($action, $configuration, $file) {
+function mm_cck_node_save($step, $file) {
   // is there a node attached to the $file array?
   if (! $node = $file->node_get()) {
     // set an alert
@@ -182,14 +180,15 @@ function mm_cck_node_save($action, $configuration, $file) {
   }
 
   // Load CCK data
-  content_load();
+  content_load($node);
 
-  // get the field that we are using
-  $field = content_fields($configuration['mm_cck_field_save_'. $action]);
+  // Get the field that we are using
+  $field_name = $step->settings['cck_field_save_node'];
+  $field = content_fields($field_name, $node->type);
+
   switch ($field['type']) {
     case 'text':
-      // @TODO this is likely wrong
-      $node->{$field['field_name']} = array(array('value' => $file_path));
+      $node->$field_name = array(array('value' => $file_path));
       // save the node
       node_save($node);
       // clear the cache
@@ -200,14 +199,14 @@ function mm_cck_node_save($action, $configuration, $file) {
     // handle CCK image and CCK file field cases
     case 'image':
     case 'filefield':
-      if (! $file = mm_cck_field_filefield($node, $field, $file->filepath, $configuration)) {
+      if (! $file = mm_cck_field_filefield($node, $field, $file->filepath, $step)) {
         return;
       }
     break;
   }
 
   // return the file
-  return $file['filepath'];
+  return $file->filepath;
 }
 
 
@@ -222,7 +221,7 @@ function mm_cck_node_save($action, $configuration, $file) {
  * @param array $configuration
  * @return array
  */
-function mm_cck_field_filefield(&$node, $field, $file_path, $configuration) {
+function mm_cck_field_filefield(&$node, $field, $filepath, $step) {
   // is there a specified directory to use with this field?
   $destination_path = mm_cck_field_widget_files_directory($field);
 
@@ -230,10 +229,18 @@ function mm_cck_field_filefield(&$node, $field, $file_path, $configuration) {
   if ($field['type'] == 'image') {
     $validators = array_merge(filefield_widget_upload_validators($field), imagefield_widget_upload_validators($field));
   }
-  else { $validators =  filefield_widget_upload_validators($field);}
+  else {
+     $validators =  filefield_widget_upload_validators($field);
+     // Set filefield size validation to the per file limit set on the field. filefield_widget_upload_validators
+     // sets the max filesize to the sites PHP upload limit if the field setting is greater than the PHP upload limit.
+     // In the case of programmatic saving of files via media mover, we can use sizes greater than the PHP upload limit.
+     if ($field['widget']['max_filesize_per_file']) {
+       $validators['filefield_validate_size'][0] = parse_size($field['widget']['max_filesize_per_file']);
+     }
+  }
 
   // now get the new field
-  if (! $file = field_file_save_file($file_path, $validators, $destination_path)) {
+  if (! $file = field_file_save_file($filepath, $validators, $destination_path)) {
     watchdog('MM Content', 'Could not save file', NULL, WATCHDOG_ERROR);
     return;
   }
@@ -241,7 +248,7 @@ function mm_cck_field_filefield(&$node, $field, $file_path, $configuration) {
   // we need to alter the file object slightly so it will display correctly
   $file['data'] = array('description' => '');
   // do we list the file?
-  $file['list'] = $configuration['field_save_list'];
+  $file['list'] = $step->settings['field_save_list'];
 
   // add the file on to the node
   // @TODO not sure if the 0 is correct, see: http://drupal.org/node/532170

@@ -82,7 +82,7 @@ function mm_control_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
   if ($op == 'insert' || $op == 'update') {
     // Get the configurations that need to be done
     if ($to_run = variable_get('mm_control_congfiguration_options', FALSE)) {
-      foreach($to_run['mm_control_node_run'] as $cid) {
+      foreach ($to_run['mm_control_node_run'] as $cid) {
         $has_run = array();
         // Run each configuration only once. Note that if new nodes
         // are created by a configuration, infinite loops can be created
@@ -90,6 +90,12 @@ function mm_control_nodeapi(&$node, $op, $a3 = NULL, $a4 = NULL) {
           $has_run[$cid] = TRUE;
           // run the media mover configuration on this node
           $configuration = media_mover_api_configuration_get($cid);
+          // Run the harvest op
+          $function = $configuration->steps[0]->callback;
+          // Did we get any files?
+          if ($files = $function($node)) {
+            $configuration->run($file);
+          }
           $configuration->run_nid($node->nid);
         }
       }

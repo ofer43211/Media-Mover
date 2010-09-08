@@ -1,6 +1,6 @@
 <?php
 
-/* $Id: media_mover_api.install,v 1.1.2.16.2.5.2.24 2010/04/18 22:20:02 arthuregg Exp $ */
+/* $Id: media_mover_api.install,v 1.1.2.16.2.5.2.25 2010/09/03 16:36:13 arthuregg Exp $ */
 
 /**
  * @FILE media mover db files
@@ -39,7 +39,7 @@ function media_mover_api_schema() {
       'fid' => array('type' => 'int', 'unsigned' => TRUE, 'description' => 'Drupal file id'),
       'cid' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Configuration machine name ID'),
       'step_order' => array('type' => 'int', 'unsigned' => TRUE, 'description' => 'Step order that this file is currently in'),
-      'filepath_in' => array(
+      'source_filepath' => array(
         'type' => 'text',
         'size' => 'medium',
         'description' => 'Harvested file',
@@ -74,9 +74,11 @@ function media_mover_api_schema() {
       ),
       'data' => array(
         'type' => 'text',
-        'size' => 'medium',
+        'not null' => FALSE,
+        'size' => 'big',
+        'serialize' => TRUE,
         'description' => 'All data associated with this file',
-      )
+      ),
     ),
     'indexes' => array (
       'mmfid' => array('mmfid'),
@@ -90,11 +92,31 @@ function media_mover_api_schema() {
   $schema['media_mover_steps'] = array(
     'description' => 'Data for a specific step inside a Media Mover configuration.',
     'fields' => array (
-      'sid' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Step machine name ID'),
-      'name' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Name of the step'),
-      'module'  => array('type' => 'varchar', 'length' => 255, 'default' => ''),
-      'action_id'  => array('type' => 'varchar', 'length' => 255, 'default' => ''),
+      'sid' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => '',
+        'description' =>
+        'Step machine name ID'
+      ),
+      'name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => '',
+        'description' => 'Name of the step'
+      ),
+      'module'  => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => ''
+      ),
+      'action_id'  => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => ''
+      ),
       'settings'  => array(
+        'serialize' => TRUE,
         'type' => 'text',
         'size' => 'medium',
         'description' => 'Serialize settings data for this step.',
@@ -120,19 +142,46 @@ function media_mover_api_schema() {
   $schema['media_mover_step_map'] = array(
     'description' => 'Maps Media Mover steps to configurations mapping',
     'fields' => array (
-      'sid' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Step machine name ID'),
-      'cid' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Configuration machine name ID'),
-      'step_order' => array('type' => 'int', 'unsigned' => TRUE, 'description' => 'Order that this step is in the configuration'),
-      'name' => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Name of the step'),
+      'step_map_id' => array(
+        'type' => 'serial',
+        'description' => 'Unique identifier for this step/configuration pair'
+      ),
+      'sid' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => '',
+        'description' => 'Step machine name ID'
+      ),
+      'cid' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => '',
+        'description' => 'Configuration machine name ID'
+      ),
+      'step_order' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'description' =>
+        'Order that this step is in the configuration'
+      ),
       'status' => array(
         'type' => 'varchar',
         'length' => 255,
         'description' => 'Empty or locked',
       ),
-      'start_time'  => array('type' => 'int', 'unsigned' => TRUE),
-      'stop_time'  => array('type' => 'int', 'unsigned' => TRUE),
+      'start_time'  => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0
+      ),
+      'stop_time'  => array(
+        'type' => 'int',
+        'not null' => TRUE,
+        'default' => 0
+      ),
     ),
     'indexes' => array (
+      'step_map_id' => array('step_map_id'),
       'sid' => array('sid'),
       'cid' => array('cid'),
     )
@@ -141,15 +190,29 @@ function media_mover_api_schema() {
   $schema['media_mover_configurations'] = array(
     'description' => 'The Media Mover configuration description.',
     'fields' => array (
-      'cid'  => array('type' => 'varchar', 'length' => 255, 'default' => '', 'description' => 'Configuration machine name ID'),
-      'name'  => array('type' => 'varchar', 'length' => 255, 'default' => ''),
-      'description'  => array('type' => 'text', 'size' => 'normal'),
+      'cid'  => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Configuration machine name ID'
+      ),
+      'name'  => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'default' => ''
+      ),
+      'description'  => array(
+        'type' => 'text',
+        'size' => 'normal'
+      ),
       'status' => array(
         'type' => 'varchar',
         'length' => 255,
         'description' => 'Usually enabled or disabled',
       ),
       'settings'  => array(
+        'serialize' => TRUE,
         'type' => 'text',
         'size' => 'medium',
         'description' => 'Serialized array of configuration data not specific to a step in the configuration.',

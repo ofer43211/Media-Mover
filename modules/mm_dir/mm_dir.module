@@ -1,6 +1,6 @@
 <?php
 
-// $Id: mm_dir.module,v 1.1.2.11 2010/07/18 21:20:31 msonnabaum Exp $
+// $Id: mm_dir.module,v 1.1.2.12 2010/09/03 16:36:12 arthuregg Exp $
 
 
 /**
@@ -49,13 +49,13 @@ function mm_dir_config_harvest($step) {
     '#title' => t('Directory path'),
     '#type' => 'textfield',
     '#default_value' => isset($step->settings['path']) ? $step->settings['path'] : '',
-    '#description' => t('Absolute path or relative path from Drupal\'s root (eg: sites/default/files) to the directory you wish to harvest from.  Note you may encounter open base dir issues wtih some PHP installations if your directory is not inside of your web root.'),
+    '#description' => t('Absolute path or relative path from Drupal\'s root (eg: sites/default/files) to the directory you wish to harvest from. Note you may encounter open base dir issues wtih some PHP installations if your directory is not inside of your web root.'),
   );
   $form['mm_dir_conf']['file_types'] = array(
     '#title' => t('File types'),
     '#type' => 'textfield',
     '#default_value' => isset($step->settings['file_types']) ? $step->settings['file_types'] : 'avi mov wmv mpeg mp4 mpeg2 dv 3gp 3g2 mpeg4',
-    '#description' => t('Space separated list of file types that can be harvested. These are file extensions and are values like "avi mov wmv mpeg mp4 mpeg2 dv".'),
+    '#description' => t('Space separated list of file types that can be harvested. These are file extensions and are values like "avi mov wmv mpeg mp4 mpeg2 dv". Leave blank to harvest any kind of file.'),
   );
   return $form;
 }
@@ -97,7 +97,9 @@ function mm_dir_config_storage($step) {
     '#title' => t('Directory path'),
     '#type' => 'textfield',
     '#default_value' => isset($step->settings['path']) ? $step->settings['path'] : '',
-    '#description' => t('Absolute path to the directory you wish to store in. Note you may encounter open base dir issues wtih some PHP installations if your directory is not inside of your web root.'),
+    '#description' => t('Absolute path to the directory you wish to store in.
+      Note you may encounter open base dir issues wtih some PHP installations if your directory is
+      not inside of your web root. Leave the field blank to harvest any file extension'),
   );
   return $form;
 }
@@ -158,11 +160,12 @@ function mm_dir_harvest($step) {
 
   // check the returned files
   if ($files) {
+    // Get the creating configuration
+    $configuration = media_mover_api_configuration_get($step->cid);
     foreach ($files as $filepath => $file) {
       // now we need to see if we have this file in the database. Note that in
       // this instance, we are not checking dates on files vs. the database
-      $result = db_result(db_query("SELECT mmfid FROM {media_mover_files} WHERE cid = '%s' AND filepath_in = '%s'", $step->cid, $filepath));
-      if (! $result) {
+      if (! $configuration->file_harvested($filepath)) {
         // We just need to return a filepath as the file is local to
         // the same file system as Drupal.
         $return[] = array('filepath' => $filepath);

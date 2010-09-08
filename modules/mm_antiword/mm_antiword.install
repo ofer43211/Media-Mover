@@ -1,6 +1,6 @@
 <?php
 
-// $Id: mm_antiword.install,v 1.1.2.4 2010/02/23 05:18:01 arthuregg Exp $
+// $Id: mm_antiword.install,v 1.1.2.5 2010/08/17 18:11:01 arthuregg Exp $
 
 /**
  * @file
@@ -20,14 +20,10 @@ function mm_antiword_uninstall() {
  */
 function mm_antiword_install() {
   // see if we can find antiword
-  if ($path = exec('export PATH=$PATH:/sw/bin:/bin:/usr/bin; which antiword')) {
-    variable_set('mm_antiword_path', $path);
-    drupal_set_message(t('Media Mover Antiword was installed and the path to the binary has been set. You should now be able to convert files'));
-  }
-  else {
-    drupal_set_message(t('Meida Mover Antiword could not find the path to the Antiword binary.
-      You will need to set this by hand at: %link',
-      array('%link' => l('admin/build/media_mover/settings/mm_antiword', 'admin/build/media_mover/settings/mm_antiword'))
+  if (! $path = exec('export PATH=$PATH:/sw/bin:/bin:/usr/bin; which antiword')) {
+    drupal_set_message(t('Media Mover Antiword could not find the path to the Antiword binary.
+      You will need to set this by hand at: !link',
+      array('!link' => l('admin/build/media_mover/settings/mm_antiword', 'admin/build/media_mover/settings/mm_antiword'))
     ));
   }
 }

@@ -1,6 +1,6 @@
 <?php
 
-// $Id: class_media_mover_configuration.php,v 1.1.2.42 2010/07/25 14:25:59 arthuregg Exp $
+// $Id: class_media_mover_configuration.php,v 1.1.2.48 2010/09/03 16:36:12 arthuregg Exp $
 
 /**
  * @file
@@ -10,15 +10,16 @@
 class media_mover_configuration {
 
   /**
-   * When we create a new MM configuration, it is by default on step one.
-   * @return unknown_type
+   * Construct a new configuration
    */
   function __construct($cid = NULL) {
+    // Make sure status isset
     $this->status = NULL;
     $this->step = 0;
     $this->steps = array();
     $this->passthrough = NULL;
-
+    // Before a configuration is loaded it has no information loaded from the db
+    $this->new = TRUE;
     if ($cid) {
       $this->load($cid);
     }
@@ -32,15 +33,18 @@ class media_mover_configuration {
    *   int, configuration id
    */
   function load($cid) {
-    // get the configuration data
-    $configuration = db_fetch_object(db_query("SELECT * FROM {media_mover_configurations} WHERE cid = '%s'", $cid));
-    $this->cid = $cid;
-    $this->name = $configuration->name;
-    $this->description = $configuration->description;
+    // Get the configuration data
+    $data = db_fetch_object(db_query("SELECT * FROM {media_mover_configurations} WHERE cid = '%s'", $cid));
     // Get the configuration settings
-    $this->settings = unserialize($configuration->settings);
+    $data->settings = unserialize($data->settings);
+    foreach ($data as $key => $value) {
+      $this->{$key} = $value;
+    }
     // Get the specific step data for this configuration
-    $this->steps_get();
+    $this->steps_load();
+    // Configuration has been loaded
+    $this->new = FALSE;
+    drupal_alter('media_mover_configuration_load', $this);
   }
 
 
@@ -49,34 +53,22 @@ class media_mover_configuration {
    * or overwrite existing data in the db.
    */
   function save() {
-    // We can only move through this function once. Because of FAPI
-    // we wil go through this twice
-    // @TODO check to see if this is really true
-    static $control;
-
-    if (! $control) {
-      // Allow configurations to pass through the system without
-      // being saved to the db
-      if ($this->passthrough) {
-        return;
-      }
-
-      // If this configuration already exists, we delete the entry just in case
-      // @TODO convert this to drupal_write_record
-      db_query("DELETE FROM {media_mover_configurations} WHERE cid = '%s'");
-      db_query("INSERT INTO {media_mover_configurations} (cid, name, description, settings, status) VALUES ('%s', '%s', '%s', '%s', '%s')",
-        $this->cid, $this->name, $this->description, serialize($this->settings), $this->status
-      );
-
-      // Save each of the steps
-      foreach ($this->steps as $step_order => $step) {
-        $step->save();
-        // Update the step map
-        $step->map($this->cid, $step_order);
-      }
-
-      // Update the st
-      $control = TRUE;
+    drupal_alter('media_mover_api_configuration_save', $this);
+    // Allow configurations to pass through the system without
+    // being saved to the db
+    if ($this->passthrough) {
+      return;
+    }
+    // Save record
+    drupal_write_record('media_mover_configurations', $this, $this->new ? NULL : 'cid');
+    // Save each of the steps
+    foreach ($this->steps as $step_order => $step) {
+      // Step has to know which configuration it belongs to
+      $step->cid = $this->cid;
+      // Step has to have order
+      $step->step_order = $step_order;
+      // Save the completed step
+      $step->save();
     }
   }
 
@@ -87,32 +79,29 @@ class media_mover_configuration {
    * @TODO this has to support limiting the number of files
    *       selected by the current configuration
    * @param $status
-   *   string, optional file status
+   *   String, step order to select files for
    * @param $step_order
    *   Integer, what step to select for
    * @param $load
    *   Boolean, should the full file be returned or only the mmfid?
    */
   function get_files($status = FALSE, $step_order = FALSE, $load = TRUE) {
-    $options = array();
-    $options[] = "cid = '" . $this->cid . "'";
-    // Select by the status if requested
+    $conditions[] = "cid = '" . $this->cid . "'";
     if ($status) {
-      $options[] = "status = \"$status\"";
+      $conditions[] = "status = '$status'";
     }
-    // Select only from the specified step
     if ($step_order) {
-      $options[] = "step_order = $step_order";
+      $conditions[] = "step_order = '$step_order'";
     }
-    $options = ' WHERE '. implode(' AND ', $options);
+    $conditions = 'WHERE '. implode(' AND ', $conditions);
 
     // Find all matching files
-    $results = db_query("SELECT mmfid FROM {media_mover_files} ". $options);
+    $results = db_query("SELECT mmfid FROM {media_mover_files} " . $conditions);
     // Put files into an array
     $files = array();
     while ($result = db_fetch_array($results)) {
       if ($load) {
-        $file = media_mover_api_file_get($result['mmfid'], TRUE);
+        $file = new media_mover_file($result['mmfid'], FALSE);
         $files[] = $file;
       }
       else {
@@ -138,24 +127,31 @@ class media_mover_configuration {
   }
 
   /**
-   * Run a complete configuration.
+   * Run a complete configuration. Run on single or multiple files
+   *
+   * @param $file
+   *   Object, is a media mover file
    *
    */
-  function run($parameters = array()) {
+  function run($file = NULL) {
     // No file is being passed in, run the full configuration
     foreach ($this->steps as $step) {
-      // Harvest the files
+      // If we are harvesting, do not use any files
       if ($step->harvest) {
         $step->run();
       }
-      // Run post harvest steps
+      // Was a file passed in?
+      else if ($file) {
+        $step->run(array($files));
+      }
+      // Look for new files to operate on
       else {
-        $files = $this->get_files(MMA_FILE_STATUS_READY, $step->step_order - 1);
+        $files = $this->get_files(MMA_FILE_STATUS_READY, ($step->step_order - 1));
         $this->log('Notice', t('Configuration step: %description is acting on %count files',
-          array('%description' => $step->description, '%count' => count($files) )));
+          array('%description' => $step->description, '%count' => count($files) )), WATCHDOG_INFO);
         // Run the step on each of the files
-        foreach ($files as $mmfile) {
-          $files = $step->run($mmfile);
+        foreach ($files as $file) {
+          $step->run($file);
         }
       }
     }
@@ -170,47 +166,30 @@ class media_mover_configuration {
    *
    * @param $file
    *   Object, Media Mover file object
+   * @param $step_order
+   *   Int, specify a step to start from
    */
-  function run_file(&$file) {
+  function run_file(&$file, $step_order = 0) {
+    $steps = array_slice($this->steps, $step_order);
     // Run each step
-    foreach ($this->steps as $step) {
-      // Assign the parameters
-      $step->parameters = $parameters;
-      // We have the file; do not harvest
-      if ($step->step_order != 1) {
-        $step->run($file);
-      }
+    foreach ($steps as $step) {
+      $step->run($file);
     }
   }
 
 
   /**
-   * Run a complete configuration on a node
-   *
-   * only run the configuration on this file
-   * @param $nid
-   *   Int, Drupal node id
+   * Run the harvest operation
    */
-  function run_nid($nid) {
-    if (! isset($this->steps[0]->harvest_from_node)) {
-      watchdog('media maover api', 'Attempted to run a configuration which does not support harvesting from nodes.', array(), WATCHDOG_INFO, l($this->name, 'admin/build/media_mover/config/' . $this->cid));
-      return FALSE;
+  function harvest($params = NULL) {
+    $function = $this->steps[0]->callback;
+    if ($params) {
+      return $function($this->steps[0], $params);
     }
-
-    // Assign the nid
-    $this->steps[0]->parameters['nid'] = $nid;
-    // Harvest from this node
-    $files = $this->steps[0]->run();
-    foreach ($this->steps as $step) {
-      // We have the file; do not harvest
-      if ($step->step_order != 1) {
-        foreach ($files as $file) {
-          $step->run($file);
-        }
-      }
+    else {
+      return $function($this->steps[0]);
     }
   }
-
 
   /**
    * Simple logging function
@@ -227,44 +206,61 @@ class media_mover_configuration {
   /**
    * Delete all files associated with this configuration
    *
-   * @TODO this is not complete. Queuing function is needed
-   * @param $mmfid
-   *   int, media mover file id
+   * @param $files
+   *   Array, array of media mover files
    *
    * @param unknown_type $mmfid
    */
-  function delete_files() {
-    // We don't use $this->get_files() because we just need to get
-    // a list of mmfids to queue for deletion. There is an edge case
+  function delete_files($files = FALSE) {
+    // There is an edge case
     // where a file that is currently in use could be processed after
     // the process that owns it finishes. This could allow the file
     // to be opperated on again before the deletion queue finishes.
     // The concequences of this are hopefully small
 
-    // Fetch the files
-    $files = $this->get_files();
+    // Fetch the files if none are passed in
+    if (! $files) {
+      $files = $this->get_files();
+    }
 
+    // Make sure drupal_queue is included
+    drupal_queue_include();
+    $delete_queue = DrupalQueue::get('media_mover_api_queue_file_delete');
+    foreach ($files as $file) {
+      $file->lock();
+      $delete_queue->createItem($file);
+    }
+  }
+
+  /**
+   * Checks to see if this configuration has already harvested this filepath
+   *
+   * @param $filepath
+   *   String, a file path
+   * @return boolean
+   */
+  function file_harvested($filepath) {
+    if (db_result(db_query('SELECT mmfid FROM {media_mover_files} WHERE source_filepath = "%s" AND cid = "%s"', $filepath, $this->cid))) {
+      return TRUE;
+    }
+    return FALSE;
   }
 
 
   /**
    * Retrieves all the steps for this configuration
    */
-  function steps_get() {
+  private function steps_load() {
     // Find all the steps associated with this configuration
     $results = db_query("SELECT * FROM {media_mover_step_map} WHERE cid = '%s' ORDER BY step_order", $this->cid);
     while ($result = db_fetch_array($results)) {
       // Load the step in question
       $step = media_mover_api_step_get($result['sid']);
-      // If this configuration is not being saved to the db,
-      // honor this on the step as well
+      // If this configuration is not being saved to the db, honor this on the step as well
       if ($this->passthrough) {
         $step->passthrough = $this->passthrough;
       }
-      // Add the configuration defaults to each step
-      $step->settings['defaults'] = $this->settings;
-      // Add the step order to each step
-      // Map all the additional configuration data onto the step
+      // Add the step order data to each step
       foreach ($result as $key => $value) {
         $step->{$key} = $value;
       }
@@ -273,6 +269,7 @@ class media_mover_configuration {
     }
   }
 
+
   /**
    * Total number of steps in this configuration
    *
@@ -280,6 +277,16 @@ class media_mover_configuration {
    */
   function step_count() {
     return count($this->steps);
+  }
+
+
+  /**
+   * Returns the last numerical step in a configuration
+   *
+   * @return integer
+   */
+  function last_step() {
+    return count($this->steps) - 1;
   }
 
 
@@ -298,23 +305,6 @@ class media_mover_configuration {
 
 
   /**
-   * Removes a single step from a configuration and
-   * reorders the remaining steps
-   * @param $step_order
-   *   int, step that should be removed
-   * @return unknown_type
-   */
-  function step_remove($step_order) {
-    $steps = array_slice($this->steps, $step_order);
-    foreach ($steps as $step) {
-      $step->step_order = $step_order;
-      $step->save();
-      $step_order++;
-    }
-  }
-
-
-  /**
    * Completely deletes a configuration
    * @param $files
    *   boolean, should this configurations files be deleted?
@@ -323,26 +313,24 @@ class media_mover_configuration {
   function delete($files = FALSE) {
     // Prepare to remove all steps
     foreach ($this->steps as $step) {
-      if (! $step->remove_prepare()) {
+      if (! $step->delete()) {
         return FALSE;
       }
     }
-    // Now remove the steps
-   foreach ($this->steps as $step) {
-     $this->remove();
-   }
 
-     // Should we delete this configurations files?
+    // Are there files to be deleted?
     if ($files) {
-      // @TODO Delete files here
-      //
+      $this->delete_files($files);
     }
 
     // Remove all of the configurations steps
+    // @TODO can not delete these steps until all files are deleted.
     foreach ($this->steps as $step) {
-      $step->remove();
+      $step->delete();
     }
-   db_query("DELETE FROM {media_mover_configurations} WHERE cid = '%s'", $this->cid);
+
+    db_query("DELETE FROM {media_mover_configurations} WHERE cid = '%s'", $this->cid);
+    db_query("DELETE FROM {media_mover_step_map} WHERE cid = '%s'", $this->cid);
   }
 
 }

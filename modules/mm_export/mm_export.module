@@ -154,11 +154,13 @@ function media_mover_configurations_features_export($data, &$export, $module_nam
   $export['dependencies'][] = 'media_mover_api';
   foreach ($data as $cid) {
     $export['features']['media_mover_configurations'][] = $cid;
+    // Load the configuration
+    $configuration = media_mover_api_configuration_get($cid);
     // Get steps for this config and add them to the export.
-    foreach (media_mover_api_configuration_get_steps($cid) as $sid) {
-      $export['features']['media_mover_steps'][] = $sid;
+    foreach ($configuration->steps as $step) {
+      $export['features']['media_mover_steps'][] = $step->sid;
       // Get module dependencies for the step.
-      $module = mm_export_step_dependencies($sid);
+      $module = mm_export_step_dependencies($step->sid);
       if (!in_array($module, $export['dependencies'])) {
         $export['dependencies'][] = $module;
       }
